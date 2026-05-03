@@ -1,0 +1,56 @@
+# ============================================================
+# Root workspace ignores
+# ============================================================
+
+# macOS
+.DS_Store
+
+# JetBrains / IDE
+.idea/
+*.iml
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# ============================================================
+# Backend
+# ============================================================
+/backend/node_modules/
+/backend/dist/
+/backend/coverage/
+/backend/.nestjs/
+
+# ============================================================
+# Frontend
+# ============================================================
+/frontend/**/node_modules/
+/frontend/**/dist/
+/frontend/**/coverage/
+/frontend/**/.vite/
+
+# Optional frontend env files
+/frontend/**/.env
+/frontend/**/.env.*
+
+# ============================================================
+# Test / temp artifacts
+# ============================================================
+/tmp/
+/temp/
+*.tmp
+*.pid
+
+# ============================================================
+# OS / misc
+# ============================================================
+Thumbs.db
+

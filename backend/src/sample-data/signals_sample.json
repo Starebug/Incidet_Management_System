@@ -1,0 +1,205 @@
+{
+  "description": "Sample signals simulating an RDBMS outage followed by cascading cache failures",
+  "scenario": "Database primary node fails, causing connection pool exhaustion in API layer and cache misses",
+  "signals": [
+    {
+      "signal_id": "sig-001-rdbms-primary",
+      "component_id": "RDBMS_PRIMARY_01",
+      "service_type": "RDBMS",
+      "severity": "P0",
+      "event_ts": "2026-05-01T10:00:00.000Z",
+      "payload": {
+        "error_code": "POSTGRES_CONNECTION_REFUSED",
+        "error_message": "could not connect to server: Connection refused",
+        "host": "db-primary.internal",
+        "port": 5432,
+        "database": "ims_production",
+        "trace_id": "trace-abc-001"
+      }
+    },
+    {
+      "signal_id": "sig-002-rdbms-primary",
+      "component_id": "RDBMS_PRIMARY_01",
+      "service_type": "RDBMS",
+      "severity": "P0",
+      "event_ts": "2026-05-01T10:00:00.500Z",
+      "payload": {
+        "error_code": "POSTGRES_CONNECTION_REFUSED",
+        "error_message": "could not connect to server: Connection refused",
+        "host": "db-primary.internal",
+        "port": 5432,
+        "retry_attempt": 1,
+        "trace_id": "trace-abc-002"
+      }
+    },
+    {
+      "signal_id": "sig-003-rdbms-primary",
+      "component_id": "RDBMS_PRIMARY_01",
+      "service_type": "RDBMS",
+      "severity": "P0",
+      "event_ts": "2026-05-01T10:00:01.000Z",
+      "payload": {
+        "error_code": "POSTGRES_POOL_EXHAUSTED",
+        "error_message": "connection pool exhausted, 0 available",
+        "pool_size": 20,
+        "waiting_requests": 150,
+        "trace_id": "trace-abc-003"
+      }
+    },
+    {
+      "signal_id": "sig-004-api-timeout",
+      "component_id": "API_GATEWAY_01",
+      "service_type": "API",
+      "severity": "P1",
+      "event_ts": "2026-05-01T10:00:02.000Z",
+      "payload": {
+        "error_code": "UPSTREAM_TIMEOUT",
+        "error_message": "Request to /api/users timed out after 30000ms",
+        "endpoint": "/api/users",
+        "method": "GET",
+        "timeout_ms": 30000,
+        "trace_id": "trace-def-001"
+      }
+    },
+    {
+      "signal_id": "sig-005-api-timeout",
+      "component_id": "API_GATEWAY_01",
+      "service_type": "API",
+      "severity": "P1",
+      "event_ts": "2026-05-01T10:00:02.500Z",
+      "payload": {
+        "error_code": "UPSTREAM_TIMEOUT",
+        "error_message": "Request to /api/orders timed out after 30000ms",
+        "endpoint": "/api/orders",
+        "method": "GET",
+        "timeout_ms": 30000,
+        "trace_id": "trace-def-002"
+      }
+    },
+    {
+      "signal_id": "sig-006-cache-miss",
+      "component_id": "CACHE_CLUSTER_01",
+      "service_type": "DISTRIBUTED_CACHE",
+      "severity": "P2",
+      "event_ts": "2026-05-01T10:00:03.000Z",
+      "payload": {
+        "error_code": "CACHE_MISS_STORM",
+        "error_message": "Cache miss rate exceeded threshold",
+        "miss_rate_percent": 95.5,
+        "normal_miss_rate_percent": 5.0,
+        "keys_affected": ["user:*", "session:*"],
+        "trace_id": "trace-ghi-001"
+      }
+    },
+    {
+      "signal_id": "sig-007-cache-timeout",
+      "component_id": "CACHE_CLUSTER_01",
+      "service_type": "DISTRIBUTED_CACHE",
+      "severity": "P2",
+      "event_ts": "2026-05-01T10:00:03.500Z",
+      "payload": {
+        "error_code": "REDIS_TIMEOUT",
+        "error_message": "Redis command timed out after 2000ms",
+        "command": "GET",
+        "key": "user:12345:profile",
+        "timeout_ms": 2000,
+        "trace_id": "trace-ghi-002"
+      }
+    },
+    {
+      "signal_id": "sig-008-queue-backpressure",
+      "component_id": "ASYNC_QUEUE_01",
+      "service_type": "ASYNC_QUEUE",
+      "severity": "P2",
+      "event_ts": "2026-05-01T10:00:04.000Z",
+      "payload": {
+        "error_code": "QUEUE_LAG_HIGH",
+        "error_message": "Consumer lag exceeded threshold",
+        "queue_name": "order-processing",
+        "current_lag": 50000,
+        "threshold_lag": 10000,
+        "consumer_count": 3,
+        "trace_id": "trace-jkl-001"
+      }
+    },
+    {
+      "signal_id": "sig-009-mcp-host",
+      "component_id": "MCP_HOST_01",
+      "service_type": "MCP_HOST",
+      "severity": "P1",
+      "event_ts": "2026-05-01T10:00:05.000Z",
+      "payload": {
+        "error_code": "MCP_TOOL_EXECUTION_FAILED",
+        "error_message": "Tool execution failed due to upstream dependency",
+        "tool_name": "database_query",
+        "upstream_service": "RDBMS_PRIMARY_01",
+        "execution_time_ms": 30500,
+        "trace_id": "trace-mno-001"
+      }
+    },
+    {
+      "signal_id": "sig-010-nosql-latency",
+      "component_id": "NOSQL_CLUSTER_01",
+      "service_type": "NOSQL",
+      "severity": "P2",
+      "event_ts": "2026-05-01T10:00:06.000Z",
+      "payload": {
+        "error_code": "MONGO_SLOW_QUERY",
+        "error_message": "Query exceeded latency threshold",
+        "collection": "audit_logs",
+        "operation": "find",
+        "latency_ms": 5200,
+        "threshold_ms": 1000,
+        "trace_id": "trace-pqr-001"
+      }
+    }
+  ],
+  "expected_work_items": [
+    {
+      "component_id": "RDBMS_PRIMARY_01",
+      "severity": "P0",
+      "expected_signal_count": 3,
+      "description": "Primary database outage - signals 001, 002, 003 should debounce into one work item"
+    },
+    {
+      "component_id": "API_GATEWAY_01",
+      "severity": "P1",
+      "expected_signal_count": 2,
+      "description": "API timeouts due to DB failure - signals 004, 005"
+    },
+    {
+      "component_id": "CACHE_CLUSTER_01",
+      "severity": "P2",
+      "expected_signal_count": 2,
+      "description": "Cache degradation - signals 006, 007"
+    },
+    {
+      "component_id": "ASYNC_QUEUE_01",
+      "severity": "P2",
+      "expected_signal_count": 1,
+      "description": "Queue backpressure - signal 008"
+    },
+    {
+      "component_id": "MCP_HOST_01",
+      "severity": "P1",
+      "expected_signal_count": 1,
+      "description": "MCP host failure - signal 009"
+    },
+    {
+      "component_id": "NOSQL_CLUSTER_01",
+      "severity": "P2",
+      "expected_signal_count": 1,
+      "description": "NoSQL latency spike - signal 010"
+    }
+  ],
+  "sample_rca": {
+    "work_item_component_id": "RDBMS_PRIMARY_01",
+    "incident_start": "2026-05-01T10:00:00.000Z",
+    "incident_end": "2026-05-01T10:45:00.000Z",
+    "root_cause_category": "INFRASTRUCTURE_FAILURE",
+    "fix_applied": "Initiated failover to read replica, promoted to primary. Restarted connection pools across all dependent services.",
+    "prevention_steps": "1. Implement automated health checks with faster failover trigger. 2. Add connection pool circuit breaker. 3. Increase replica sync frequency. 4. Add alerting for replication lag > 100ms.",
+    "mttr_seconds": 2700
+  }
+}
+

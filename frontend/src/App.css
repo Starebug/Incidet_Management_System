@@ -1,0 +1,21 @@
+/* App-level overrides — keep minimal, use Tailwind utilities */
+
+.input-field {
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid #374151;
+  background-color: #111827;
+  color: #e5e7eb;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.input-field:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+.input-field::placeholder {
+  color: #6b7280;
+}

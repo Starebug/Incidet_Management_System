@@ -1,0 +1,158 @@
+version: '3.8'
+
+services:
+  # ============================================================
+  # PostgreSQL - Source of Truth (Work Items, RCA, History)
+  # ============================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: ims-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ims
+      POSTGRES_PASSWORD: ims_secret
+      POSTGRES_DB: ims_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ims -d ims_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # MongoDB - Data Lake (Raw Signals, Audit Log)
+  # ============================================================
+  mongo:
+    image: mongo:7
+    container_name: ims-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ims
+      MONGO_INITDB_ROOT_PASSWORD: ims_secret
+      MONGO_INITDB_DATABASE: ims
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+      - ./backend/mongo/init_indexes.js:/docker-entrypoint-initdb.d/init_indexes.js:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # Redis - Hot Cache, Queue, Rate Limiter, Debounce
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    container_name: ims-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy volatile-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # Redis Commander - Redis UI (Development Only)
+  # ============================================================
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: ims-redis-commander
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    profiles:
+      - dev
+
+  # ============================================================
+  # Mongo Express - MongoDB UI (Development Only)
+  # ============================================================
+  mongo-express:
+    image: mongo-express:latest
+    container_name: ims-mongo-express
+    restart: unless-stopped
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ims
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ims_secret
+      ME_CONFIG_MONGODB_URL: mongodb://ims:ims_secret@mongo:27017/
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: admin
+    ports:
+      - "8082:8081"
+    depends_on:
+      - mongo
+    profiles:
+      - dev
+
+  # ============================================================
+  # Backend API (uncomment when ready)
+  # ============================================================
+  # backend:
+  #   build:
+  #     context: ./backend
+  #     dockerfile: Dockerfile
+  #   container_name: ims-backend
+  #   restart: unless-stopped
+  #   environment:
+  #     NODE_ENV: production
+  #     PORT: 3000
+  #     POSTGRES_URL: postgresql://ims:ims_secret@postgres:5432/ims_db
+  #     MONGODB_URL: mongodb://ims:ims_secret@mongo:27017/ims?authSource=admin
+  #     REDIS_URL: redis://redis:6379
+  #     RATE_LIMIT_RPS: 10000
+  #     DEBOUNCE_TTL_SEC: 10
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     mongo:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+
+  # ============================================================
+  # Frontend (uncomment when ready)
+  # ============================================================
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   container_name: ims-frontend
+  #   restart: unless-stopped
+  #   environment:
+  #     VITE_API_URL: http://localhost:3000
+  #   ports:
+  #     - "5173:80"
+  #   depends_on:
+  #     - backend
+
+volumes:
+  postgres_data:
+  mongo_data:
+  redis_data:
+
+networks:
+  default:
+    name: ims-network
+

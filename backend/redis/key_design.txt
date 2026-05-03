@@ -1,0 +1,189 @@
+-- ============================================================
+-- Incident Management System (IMS) - Redis Key Design
+-- Hot-path cache, debounce, rate limiting, queue
+-- ============================================================
+
+-- This file documents Redis key patterns and data structures.
+-- Use as reference for implementation.
+
+-- ============================================================
+-- 1. DEBOUNCE KEYS (10-second window per component)
+-- ============================================================
+
+-- Pattern: debounce:{component_id}
+-- Type: STRING
+-- Value: work_item_external_id (UUID)
+-- TTL: 10 seconds
+
+-- Example:
+-- SET debounce:CACHE_CLUSTER_01 "3d9fef5d-4956-49bf-8f8a-06ae5a7f8a3f" EX 10 NX
+
+-- NX ensures only first signal creates the key.
+-- Subsequent signals in 10s window get existing work_item_id.
+
+
+-- ============================================================
+-- 2. DISTRIBUTED LOCK (for debounce race condition safety)
+-- ============================================================
+
+-- Pattern: lock:debounce:{component_id}
+-- Type: STRING
+-- Value: worker_id or random token
+-- TTL: 1-2 seconds (short-lived)
+
+-- Example (acquire):
+-- SET lock:debounce:CACHE_CLUSTER_01 "worker-abc-123" EX 2 NX
+
+-- Example (release - Lua script for safety):
+-- if redis.call("get", KEYS[1]) == ARGV[1] then
+--   return redis.call("del", KEYS[1])
+-- else
+--   return 0
+-- end
+
+
+-- ============================================================
+-- 3. RATE LIMITER (token bucket / fixed window)
+-- ============================================================
+
+-- Pattern: rl:{client_identifier}
+-- Type: STRING (counter) or HASH
+-- TTL: window duration (e.g., 1 second or 1 minute)
+
+-- Fixed Window Example:
+-- Key: rl:api_key:abc123:1714550400 (timestamp bucket)
+-- INCR rl:api_key:abc123:1714550400
+-- EXPIRE rl:api_key:abc123:1714550400 2  -- slightly longer than window
+
+-- Sliding Window (using sorted set):
+-- ZADD rl:sliding:abc123 <timestamp_ms> <request_id>
+-- ZREMRANGEBYSCORE rl:sliding:abc123 0 <timestamp_ms - window_ms>
+-- ZCARD rl:sliding:abc123
+
+
+-- ============================================================
+-- 4. DASHBOARD HOT CACHE
+-- ============================================================
+
+-- 4a. Active incidents sorted set (for live feed)
+-- Pattern: dashboard:active_incidents
+-- Type: SORTED SET
+-- Score: composite of severity + timestamp for ordering
+-- Member: work_item_external_id
+
+-- Score formula: (4 - severity_num) * 10^12 + updated_at_epoch_ms
+-- This sorts P0 first, then by recency within severity.
+
+-- Example:
+-- ZADD dashboard:active_incidents 4000001714550400000 "uuid-1"  -- P0
+-- ZADD dashboard:active_incidents 2000001714550300000 "uuid-2"  -- P2
+
+-- Query (top 50 active):
+-- ZREVRANGE dashboard:active_incidents 0 49
+
+
+-- 4b. Incident summary cache
+-- Pattern: incident:{external_id}
+-- Type: HASH
+-- Fields: component_id, service_type, severity, status, signal_count, updated_at
+-- TTL: 5 minutes (refreshed on updates)
+
+-- Example:
+-- HSET incident:3d9fef5d-4956-49bf-8f8a-06ae5a7f8a3f \
+--   component_id "CACHE_CLUSTER_01" \
+--   service_type "DISTRIBUTED_CACHE" \
+--   severity "P2" \
+--   status "OPEN" \
+--   signal_count 42 \
+--   updated_at "2026-05-01T10:30:00Z"
+-- EXPIRE incident:3d9fef5d-4956-49bf-8f8a-06ae5a7f8a3f 300
+
+
+-- 4c. Dashboard counters
+-- Pattern: dashboard:counters
+-- Type: HASH
+-- Fields: open_p0, open_p1, open_p2, open_p3, investigating_total, resolved_total
+
+-- Example:
+-- HINCRBY dashboard:counters open_p0 1
+-- HGETALL dashboard:counters
+
+
+-- ============================================================
+-- 5. THROUGHPUT METRICS (for observability)
+-- ============================================================
+
+-- Pattern: metrics:signals:5s:{bucket}
+-- Type: STRING (counter)
+-- TTL: 30 seconds
+
+-- Example (increment on each signal):
+-- INCR metrics:signals:5s:1714550400
+-- EXPIRE metrics:signals:5s:1714550400 30
+
+-- Read and log every 5 seconds:
+-- GET metrics:signals:5s:{current_bucket}
+
+
+-- ============================================================
+-- 6. STREAM / QUEUE (Redis Streams for async processing)
+-- ============================================================
+
+-- Stream: signals:ingest
+-- Consumer group: signal-processors
+
+-- Producer (add to stream):
+-- XADD signals:ingest * signal_id "uuid" component_id "CACHE_01" payload "{...}"
+
+-- Consumer (read with group):
+-- XREADGROUP GROUP signal-processors consumer-1 COUNT 100 BLOCK 1000 STREAMS signals:ingest >
+
+-- Acknowledge processed:
+-- XACK signals:ingest signal-processors <message_id>
+
+-- Check pending (for retries):
+-- XPENDING signals:ingest signal-processors
+
+
+-- ============================================================
+-- 7. CIRCUIT BREAKER STATE (optional)
+-- ============================================================
+
+-- Pattern: circuit:{service_name}
+-- Type: HASH
+-- Fields: state (closed/open/half-open), failure_count, last_failure_at, opened_at
+
+-- Example:
+-- HSET circuit:postgres state "closed" failure_count 0
+-- HSET circuit:postgres state "open" failure_count 5 opened_at "2026-05-01T10:00:00Z"
+
+
+-- ============================================================
+-- KEY NAMING CONVENTIONS
+-- ============================================================
+
+-- Prefix by domain:
+--   debounce:*    - Signal debouncing
+--   lock:*        - Distributed locks
+--   rl:*          - Rate limiting
+--   dashboard:*   - UI hot cache
+--   incident:*    - Per-incident cache
+--   metrics:*     - Observability counters
+--   signals:*     - Stream/queue
+--   circuit:*     - Circuit breaker state
+
+-- Use colons as separators
+-- Use lowercase
+-- Include version if schema may change: incident:v1:{id}
+
+
+-- ============================================================
+-- MEMORY MANAGEMENT NOTES
+-- ============================================================
+
+-- 1. Always set TTL on transient keys (debounce, rate limit, metrics)
+-- 2. Use SCAN instead of KEYS for production enumeration
+-- 3. Monitor memory with INFO memory
+-- 4. Consider eviction policy: volatile-lru or allkeys-lru
+-- 5. Set maxmemory in redis.conf for bounded memory
+
