@@ -6,6 +6,7 @@ import { WorkItemService } from './work-item.service';
 import { AlertStrategyResolver } from './alerting/alert-strategy.resolver';
 import { DashboardCacheService } from './dashboard-cache.service';
 import { DlqService } from './dlq.service';
+import { RawSignalBatchWriter } from './raw-signal-batch-writer.service';
 
 @Module({
   providers: [
@@ -16,8 +17,8 @@ import { DlqService } from './dlq.service';
     AlertStrategyResolver,
     DashboardCacheService,
     DlqService,
+    RawSignalBatchWriter,
   ],
-  exports: [SignalStreamConsumer],
+  exports: [SignalStreamConsumer, DashboardCacheService],
 })
 export class WorkersModule {}
-

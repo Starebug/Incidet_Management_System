@@ -17,7 +17,7 @@ export class MetricsService {
     // Log metrics every 5 seconds
     this.intervalRef = setInterval(() => {
       this.logMetrics();
-    }, 5000);
+    }, 20000);
   }
 
   incrementSignalsReceived(count = 1): void {

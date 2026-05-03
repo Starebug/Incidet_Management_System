@@ -1,33 +1,22 @@
 import { Injectable } from '@nestjs/common';
-import { PostgresService } from '../common/database/postgres.service';
-import { RedisService } from '../common/redis/redis.service';
+import { WorkItemRepository } from '@/repositories';
+import { DashboardStateRepository } from '@/repositories';
+import { DebugLogger } from '../common/utils/debug-logger';
 
 /**
  * DashboardService
  *
  * State-partitioned caching strategy:
- *   Redis keys:
- *     dashboard:open           — ZSET of external_ids (score = severity rank)
- *     dashboard:investigating  — ZSET of external_ids
- *     dashboard:resolved       — ZSET of external_ids
- *     incident:{external_id}   — HASH with summary fields
- *
- *   Read path:  Redis first → Postgres fallback
+ *   Read path:  DashboardStateRepository (Redis) first → WorkItemRepository (Postgres) fallback
  *   Write path: Workers/workflow update Redis on signal/status changes
+ *
+ * Never calls a DB driver directly — all data access via repositories.
  */
 @Injectable()
 export class DashboardService {
-  private readonly STATE_KEYS: Record<string, string> = {
-    OPEN: 'dashboard:open',
-    INVESTIGATING: 'dashboard:investigating',
-    RESOLVED: 'dashboard:resolved',
-  };
-
-  private readonly INCIDENT_TTL = 300; // 5 min TTL for incident hashes
-
   constructor(
-    private readonly pg: PostgresService,
-    private readonly redis: RedisService,
+    private readonly workItemRepo: WorkItemRepository,
+    private readonly dashboardStateRepo: DashboardStateRepository,
   ) {}
 
   /**
@@ -35,28 +24,45 @@ export class DashboardService {
    * Redis-first with Postgres fallback.
    */
   async getLiveFeed(status?: string) {
-    if (status && this.STATE_KEYS[status]) {
-      return this.getLiveFeedByStatus(status);
+    const startedAt = Date.now();
+    if (status && ['OPEN', 'INVESTIGATING', 'RESOLVED'].includes(status)) {
+      const result = await this.getLiveFeedByStatus(status);
+      this.logTiming(`getLiveFeed(status=${status}) total`, startedAt, {
+        source: result.source,
+        count: result.count,
+      });
+      return result;
     }
-    // No specific status = return all active (for backward compat)
-    return this.getLiveFeedAllActive();
+    const result = await this.getLiveFeedAllActive();
+    this.logTiming('getLiveFeed(status=ALL) total', startedAt, {
+      source: result.source,
+      count: result.count,
+    });
+    return result;
   }
 
   /**
    * Single-status tab: try Redis cache, fallback to Postgres.
    */
   private async getLiveFeedByStatus(status: string) {
-    const cacheKey = this.STATE_KEYS[status];
+    const cacheReadStartedAt = Date.now();
 
     try {
-      // Step 1: Get incident IDs from state-specific sorted set
-      const ids = await this.redis.client.zrange(cacheKey, 0, 99);
+      const ids = await this.dashboardStateRepo.getIdsByStatus(status, 0, 99);
+      this.logTiming(`Redis zrange for ${status}`, cacheReadStartedAt, {
+        ids: ids?.length || 0,
+      });
 
       if (ids && ids.length > 0) {
-        // Step 2: Load incident summaries from Redis hashes
-        const incidents = await this.loadIncidentSummaries(ids);
+        const summariesStartedAt = Date.now();
+        const incidents = await this.dashboardStateRepo.loadIncidentSummaries(ids);
+        this.logTiming(`Redis summaries for ${status}`, summariesStartedAt, {
+          requestedIds: ids.length,
+          loadedIncidents: incidents.length,
+        });
 
         if (incidents.length > 0) {
+          DebugLogger.log('Dashboard', `Cache HIT for status=${status} count=${incidents.length}`);
           return {
             incidents,
             status,
@@ -66,12 +72,12 @@ export class DashboardService {
           };
         }
       }
+
+      DebugLogger.log('Dashboard', `Cache MISS for status=${status}`);
     } catch (err) {
-      // Redis failure → fall through to Postgres
       console.error('[Dashboard] Redis cache read failed, falling back to Postgres:', err);
     }
 
-    // Fallback: Postgres query
     return this.getLiveFeedFromPostgres(status);
   }
 
@@ -79,19 +85,22 @@ export class DashboardService {
    * All active incidents (no specific tab selected).
    */
   private async getLiveFeedAllActive() {
-    // Try loading all three states from Redis
+    const cacheReadStartedAt = Date.now();
     try {
-      const [openIds, investigatingIds, resolvedIds] = await Promise.all([
-        this.redis.client.zrange(this.STATE_KEYS.OPEN, 0, 49),
-        this.redis.client.zrange(this.STATE_KEYS.INVESTIGATING, 0, 49),
-        this.redis.client.zrange(this.STATE_KEYS.RESOLVED, 0, 49),
-      ]);
-
-      const allIds = [...(openIds || []), ...(investigatingIds || []), ...(resolvedIds || [])];
+      const allIds = await this.dashboardStateRepo.getAllActiveIds(50);
+      this.logTiming('Redis zrange for ALL states', cacheReadStartedAt, {
+        totalIds: allIds.length,
+      });
 
       if (allIds.length > 0) {
-        const incidents = await this.loadIncidentSummaries(allIds);
+        const summariesStartedAt = Date.now();
+        const incidents = await this.dashboardStateRepo.loadIncidentSummaries(allIds);
+        this.logTiming('Redis summaries for ALL states', summariesStartedAt, {
+          requestedIds: allIds.length,
+          loadedIncidents: incidents.length,
+        });
         if (incidents.length > 0) {
+          DebugLogger.log('Dashboard', `Cache HIT for status=ALL count=${incidents.length}`);
           return {
             incidents,
             status: 'ALL',
@@ -101,11 +110,12 @@ export class DashboardService {
           };
         }
       }
+
+      DebugLogger.log('Dashboard', 'Cache MISS for status=ALL');
     } catch (err) {
       console.error('[Dashboard] Redis cache read failed:', err);
     }
 
-    // Fallback
     return this.getLiveFeedFromPostgres(undefined);
   }
 
@@ -113,144 +123,45 @@ export class DashboardService {
    * Postgres fallback query. Optionally warm the cache from results.
    */
   private async getLiveFeedFromPostgres(status?: string) {
-    const statusFilter = status
-      ? `WHERE status = '${status}'`
-      : `WHERE status != 'CLOSED'`;
+    const pgStartedAt = Date.now();
 
-    const result = await this.pg.query(
-      `SELECT external_id, component_id, service_type, severity, status,
-              first_signal_at, last_signal_at, signal_count, updated_at
-       FROM work_items
-       ${statusFilter}
-       ORDER BY
-         CASE severity
-           WHEN 'P0' THEN 0
-           WHEN 'P1' THEN 1
-           WHEN 'P2' THEN 2
-           WHEN 'P3' THEN 3
-         END ASC,
-         updated_at DESC
-       LIMIT 100`,
-    );
+    const rows = await this.workItemRepo.findLiveFeed(status, 100);
+    this.logTiming(`Postgres live feed query (${status || 'ALL'})`, pgStartedAt, {
+      rows: rows.length,
+    });
 
     // Warm cache asynchronously (fire and forget)
-    this.warmCache(result.rows).catch(() => {});
+    this.dashboardStateRepo.warmCache(rows).catch(() => {});
 
     return {
-      incidents: result.rows,
+      incidents: rows,
       status: status || 'ALL',
-      count: result.rows.length,
+      count: rows.length,
       source: 'postgres',
       refreshed_at: new Date().toISOString(),
     };
   }
 
   /**
-   * Load incident summary hashes from Redis.
-   * Filters out any missing/expired entries.
-   */
-  private async loadIncidentSummaries(ids: string[]): Promise<any[]> {
-    const pipeline = this.redis.client.pipeline();
-    for (const id of ids) {
-      pipeline.hgetall(`incident:${id}`);
-    }
-
-    const results = await pipeline.exec();
-    if (!results) return [];
-
-    const incidents: any[] = [];
-    for (const [err, data] of results) {
-      if (!err && data && typeof data === 'object' && Object.keys(data as object).length > 0) {
-        incidents.push(data);
-      }
-    }
-
-    return incidents;
-  }
-
-  /**
-   * Warm Redis cache from Postgres results.
-   */
-  private async warmCache(rows: any[]): Promise<void> {
-    if (!rows || rows.length === 0) return;
-
-    const pipeline = this.redis.client.pipeline();
-
-    for (const row of rows) {
-      const key = `incident:${row.external_id}`;
-      const stateKey = this.STATE_KEYS[row.status];
-
-      // Write incident hash
-      pipeline.hset(key, {
-        external_id: row.external_id,
-        component_id: row.component_id,
-        service_type: row.service_type,
-        severity: row.severity,
-        status: row.status,
-        first_signal_at: row.first_signal_at?.toISOString?.() || row.first_signal_at,
-        updated_at: row.updated_at?.toISOString?.() || row.updated_at,
-      });
-      pipeline.expire(key, this.INCIDENT_TTL);
-
-      // Add to state-specific sorted set (score = severity rank)
-      if (stateKey) {
-        const score = this.severityScore(row.severity);
-        pipeline.zadd(stateKey, score, row.external_id);
-      }
-    }
-
-    await pipeline.exec();
-  }
-
-  /**
-   * Score for sorted set ordering: lower = higher priority.
-   */
-  private severityScore(severity: string): number {
-    switch (severity) {
-      case 'P0': return 0;
-      case 'P1': return 1;
-      case 'P2': return 2;
-      case 'P3': return 3;
-      default: return 4;
-    }
-  }
-
-  /**
-   * Aggregated dashboard statistics (unchanged — reads from Postgres).
+   * Aggregated dashboard statistics.
    */
   async getStats() {
-    const [statusCounts, severityCounts, mttrStats, recentClosed] = await Promise.all([
-      this.pg.query(
-        `SELECT status, COUNT(*) as count FROM work_items GROUP BY status`,
-      ),
-      this.pg.query(
-        `SELECT severity, COUNT(*) as count FROM work_items GROUP BY severity`,
-      ),
-      this.pg.query(
-        `SELECT
-           severity,
-           AVG(mttr_seconds) as avg_mttr,
-           MIN(mttr_seconds) as min_mttr,
-           MAX(mttr_seconds) as max_mttr,
-           COUNT(*) as closed_count
-         FROM work_items
-         WHERE mttr_seconds IS NOT NULL
-         GROUP BY severity`,
-      ),
-      this.pg.query(
-        `SELECT external_id, component_id, severity, mttr_seconds, closed_at
-         FROM work_items
-         WHERE status = 'CLOSED'
-         ORDER BY closed_at DESC
-         LIMIT 10`,
-      ),
-    ]);
+    const stats = await this.workItemRepo.getStats();
 
     return {
-      by_status: statusCounts.rows,
-      by_severity: severityCounts.rows,
-      mttr: mttrStats.rows,
-      recent_closed: recentClosed.rows,
+      by_status: stats.statusCounts,
+      by_severity: stats.severityCounts,
+      mttr: stats.mttrStats,
+      recent_closed: stats.recentClosed,
     };
+  }
+
+  private logTiming(operation: string, startedAt: number, meta?: Record<string, unknown>) {
+    const durationMs = Date.now() - startedAt;
+    if (meta) {
+      DebugLogger.log('Dashboard', `${operation} took ${durationMs}ms`, meta);
+      return;
+    }
+    DebugLogger.log('Dashboard', `${operation} took ${durationMs}ms`);
   }
 }

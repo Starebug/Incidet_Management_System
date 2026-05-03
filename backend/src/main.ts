@@ -5,6 +5,9 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  // Enable graceful shutdown hooks (triggers onModuleDestroy)
+  app.enableShutdownHooks();
+
   // Global validation pipe
   app.useGlobalPipes(
     new ValidationPipe({
@@ -29,4 +32,3 @@ async function bootstrap() {
 }
 
 bootstrap();
-

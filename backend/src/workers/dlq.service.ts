@@ -1,15 +1,16 @@
 import { Injectable } from '@nestjs/common';
-import { MongoService } from '../common/database/mongo.service';
+import { SignalRepository } from '@/repositories';
 
 /**
  * DlqService — Dead Letter Queue
  *
  * Stores permanently failed signals for investigation.
- * Uses MongoDB dead_letter_queue collection with 7-day TTL.
+ * Delegates all data access to SignalRepository.
+ * No direct DB driver calls.
  */
 @Injectable()
 export class DlqService {
-  constructor(private readonly mongo: MongoService) {}
+  constructor(private readonly signalRepo: SignalRepository) {}
 
   /**
    * Write a failed signal to the dead letter queue.
@@ -21,7 +22,7 @@ export class DlqService {
     attemptCount: number,
   ): Promise<void> {
     try {
-      await this.mongo.deadLetterQueue.insertOne({
+      await this.signalRepo.insertDlqEntry({
         signal_id: signalData.signal_id || 'unknown',
         payload: signalData,
         error_type: errorType,
@@ -42,10 +43,9 @@ export class DlqService {
    */
   async getDepth(): Promise<number> {
     try {
-      return await this.mongo.deadLetterQueue.countDocuments();
+      return await this.signalRepo.getDlqDepth();
     } catch {
       return -1;
     }
   }
 }
-

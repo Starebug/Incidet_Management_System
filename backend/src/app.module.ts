@@ -8,6 +8,7 @@ import { RedisModule } from './common/redis/redis.module';
 import { DatabaseModule } from './common/database/database.module';
 import { ServicesModule } from './common/services/services.module';
 import { WorkersModule } from './workers/workers.module';
+import { RepositoriesModule } from '@/repositories';
 import { RateLimiterMiddleware } from './common/middleware/rate-limiter.middleware';
 
 @Module({
@@ -16,6 +17,7 @@ import { RateLimiterMiddleware } from './common/middleware/rate-limiter.middlewa
     ServicesModule,
     RedisModule,
     DatabaseModule,
+    RepositoriesModule,
     SignalsModule,
     IncidentsModule,
     DashboardModule,

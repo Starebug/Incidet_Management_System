@@ -26,10 +26,19 @@ export default function LiveFeed() {
     }
   };
 
+  const handleRefresh = () => {
+    if (loading) {
+      return;
+    }
+
+    setLoading(true);
+    load(activeTab);
+  };
+
   useEffect(() => {
     setLoading(true);
     load(activeTab);
-    const interval = setInterval(() => load(activeTab), 5000);
+    const interval = setInterval(() => load(activeTab), 20000);
     return () => clearInterval(interval);
   }, [activeTab]);
 
@@ -53,9 +62,18 @@ export default function LiveFeed() {
       {/* Header */}
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-white">Live Incidents</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold text-white">Live Incidents</h1>
+            <button
+              type="button"
+              onClick={handleRefresh}
+              className="inline-flex items-center rounded-lg border border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:bg-gray-800"
+            >
+              Refresh
+            </button>
+          </div>
           <p className="text-sm text-gray-500">
-            Auto-refreshes every 5s
+            Auto-refreshes every 20s
             {source && <span className="ml-2 text-xs text-gray-600">({source})</span>}
           </p>
         </div>

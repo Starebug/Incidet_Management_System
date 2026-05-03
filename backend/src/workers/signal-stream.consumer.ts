@@ -1,7 +1,8 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { RedisService } from '../common/redis/redis.service';
+import { RedisService } from '@/common/redis/redis.service';
 import { SignalProcessor } from './signal.processor';
-import { MetricsService } from '../common/services/metrics.service';
+import { MetricsService } from '@/common/services/metrics.service';
+import { DebugLogger } from '@/common/utils/debug-logger';
 
 /**
  * SignalStreamConsumer
@@ -64,7 +65,7 @@ export class SignalStreamConsumer implements OnModuleInit, OnModuleDestroy {
    */
   private async ensureConsumerGroup(): Promise<void> {
     try {
-      await this.redis.client.xgroup(
+      await this.redis.stream.xgroup(
         'CREATE',
         this.streamKey,
         this.groupName,
@@ -87,7 +88,7 @@ export class SignalStreamConsumer implements OnModuleInit, OnModuleDestroy {
   private async consumeLoop(): Promise<void> {
     while (this.running) {
       try {
-        const results: any = await this.redis.client.xreadgroup(
+        const results: any = await this.redis.stream.xreadgroup(
           'GROUP',
           this.groupName,
           this.consumerName,
@@ -110,6 +111,11 @@ export class SignalStreamConsumer implements OnModuleInit, OnModuleDestroy {
         if (messages.length === 0) {
           continue;
         }
+
+        DebugLogger.log('SignalWorker', 'Consumed stream batch', {
+          consumer: this.consumerName,
+          batchSize: messages.length,
+        });
 
         // Process with bounded concurrency
         await this.processBatch(messages);
@@ -151,9 +157,13 @@ export class SignalStreamConsumer implements OnModuleInit, OnModuleDestroy {
       await this.processor.process(signal);
 
       // ACK — message is fully processed
-      await this.redis.client.xack(this.streamKey, this.groupName, messageId);
+      await this.redis.stream.xack(this.streamKey, this.groupName, messageId);
 
       this.metrics.incrementSignalsProcessed();
+      DebugLogger.log('SignalWorker', 'Acked message', {
+        consumer: this.consumerName,
+        messageId,
+      });
     } catch (err: any) {
       console.error(`[Worker] Failed to process message ${messageId}:`, err.message);
       // Do NOT ack — message stays in PEL for redelivery or claim
@@ -173,7 +183,7 @@ export class SignalStreamConsumer implements OnModuleInit, OnModuleDestroy {
 
       try {
         // XAUTOCLAIM: claim messages idle > claimIdleMs from any consumer
-        const result: any = await this.redis.client.xautoclaim(
+        const result: any = await this.redis.stream.xautoclaim(
           this.streamKey,
           this.groupName,
           this.consumerName,
@@ -186,7 +196,10 @@ export class SignalStreamConsumer implements OnModuleInit, OnModuleDestroy {
         // result = [nextStartId, [[messageId, fields], ...], deletedIds]
         if (result && result[1] && (result[1] as any[]).length > 0) {
           const claimed = result[1] as Array<[string, string[]]>;
-          console.log(`[Worker] Reclaimed ${claimed.length} stale pending messages`);
+          DebugLogger.log('SignalWorker', 'Reclaimed stale pending messages', {
+            consumer: this.consumerName,
+            claimedCount: claimed.length,
+          });
           await this.processBatch(claimed);
         }
       } catch (err) {
