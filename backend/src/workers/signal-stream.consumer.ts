@@ -1,6 +1,7 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { RedisService } from '@/common/redis/redis.service';
-import { SignalProcessor } from './signal.processor';
+import { SignalProcessor, ActiveProcessingLeaseError, DlqHandledError } from './signal.processor';
+import { DebounceResolutionInProgressError } from './debounce.service';
 import { MetricsService } from '@/common/services/metrics.service';
 import { DebugLogger } from '@/common/utils/debug-logger';
 
@@ -165,6 +166,31 @@ export class SignalStreamConsumer implements OnModuleInit, OnModuleDestroy {
         messageId,
       });
     } catch (err: any) {
+      if (err instanceof DlqHandledError) {
+        await this.redis.stream.xack(this.streamKey, this.groupName, messageId);
+        DebugLogger.log('SignalWorker', 'Acked message after DLQ handoff', {
+          consumer: this.consumerName,
+          messageId,
+        });
+        return;
+      }
+
+      if (err instanceof ActiveProcessingLeaseError) {
+        DebugLogger.log('SignalWorker', 'Skipping ACK because another worker holds the active processing lease', {
+          consumer: this.consumerName,
+          messageId,
+        });
+        return;
+      }
+
+      if (err instanceof DebounceResolutionInProgressError) {
+        DebugLogger.log('SignalWorker', 'Skipping ACK because debounce resolution is still in progress', {
+          consumer: this.consumerName,
+          messageId,
+        });
+        return;
+      }
+
       console.error(`[Worker] Failed to process message ${messageId}:`, err.message);
       // Do NOT ack — message stays in PEL for redelivery or claim
       this.metrics.incrementDbWriteFailures();

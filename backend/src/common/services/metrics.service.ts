@@ -3,7 +3,7 @@ import { Injectable } from '@nestjs/common';
 /**
  * Metrics Service
  * Tracks throughput and system health counters.
- * Logs to console every 5 seconds.
+ * Logs to console every 20 seconds.
  */
 @Injectable()
 export class MetricsService {
@@ -14,7 +14,7 @@ export class MetricsService {
   private intervalRef: NodeJS.Timeout | null = null;
 
   constructor() {
-    // Log metrics every 5 seconds
+    // Log metrics every 20 seconds
     this.intervalRef = setInterval(() => {
       this.logMetrics();
     }, 20000);
@@ -38,15 +38,15 @@ export class MetricsService {
 
   private logMetrics(): void {
     const now = new Date().toISOString();
-    const perSec = (this.signalsReceived / 5).toFixed(1);
+    const perSec = (this.signalsReceived / 20).toFixed(1);
 
     console.log(JSON.stringify({
       timestamp: now,
-      signals_received_5s: this.signalsReceived,
+      signals_received_20s: this.signalsReceived,
       signals_per_sec: perSec,
-      signals_processed_5s: this.signalsProcessed,
-      rate_limit_rejections_5s: this.rateLimitRejections,
-      db_write_failures_5s: this.dbWriteFailures,
+      signals_processed_20s: this.signalsProcessed,
+      rate_limit_rejections_20s: this.rateLimitRejections,
+      db_write_failures_20s: this.dbWriteFailures,
     }));
 
     // Reset counters

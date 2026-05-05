@@ -5,10 +5,12 @@ import Redis, { RedisOptions } from 'ioredis';
 export class RedisService implements OnModuleInit, OnModuleDestroy {
   private readonly commandClient: Redis;
   private readonly streamClient: Redis;
+  private readonly auditStreamClient: Redis;
 
   constructor() {
     this.commandClient = this.createClient('command');
     this.streamClient = this.createClient('stream');
+    this.auditStreamClient = this.createClient('audit-stream');
   }
 
   /**
@@ -26,6 +28,14 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     return this.streamClient;
   }
 
+  /**
+   * Dedicated Redis connection for the audit persistence worker stream.
+   * This avoids contending two independent BLOCK readers on one socket.
+   */
+  get auditStream(): Redis {
+    return this.auditStreamClient;
+  }
+
   async onModuleInit() {
     // Eager initialization is done in the constructor so dependent providers
     // can safely use `client` inside their own `onModuleInit()` hooks.
@@ -35,6 +45,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await Promise.allSettled([
       this.commandClient?.quit(),
       this.streamClient?.quit(),
+      this.auditStreamClient?.quit(),
     ]);
   }
 
@@ -47,7 +58,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private createClient(role: 'command' | 'stream'): Redis {
+  private createClient(role: 'command' | 'stream' | 'audit-stream'): Redis {
     const client = new Redis(this.buildOptions());
 
     client.on('error', (err) => {

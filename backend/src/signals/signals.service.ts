@@ -4,7 +4,14 @@ import { StreamProducerService } from './stream-producer.service';
 
 @Injectable()
 export class SignalsService {
-  constructor(private readonly streamProducer: StreamProducerService) {}
+  private readonly batchEnqueueConcurrency: number;
+
+  constructor(private readonly streamProducer: StreamProducerService) {
+    this.batchEnqueueConcurrency = Math.max(
+      1,
+      parseInt(process.env.BATCH_ENQUEUE_CONCURRENCY || '20', 10),
+    );
+  }
 
   /**
    * Enqueue a single signal into Redis Stream for async processing.
@@ -16,7 +23,8 @@ export class SignalsService {
   }
 
   /**
-   * Enqueue batch of signals. Best-effort: counts accepted vs rejected.
+   * Enqueue batch of signals with bounded parallelism.
+   * Best-effort: counts accepted vs rejected.
    */
   async enqueueBatch(
     signals: IngestSignalDto[],
@@ -24,12 +32,19 @@ export class SignalsService {
     let accepted = 0;
     let rejected = 0;
 
-    for (const signal of signals) {
-      try {
-        await this.streamProducer.produce(signal);
-        accepted++;
-      } catch {
-        rejected++;
+    for (let i = 0; i < signals.length; i += this.batchEnqueueConcurrency) {
+      const chunk = signals.slice(i, i + this.batchEnqueueConcurrency);
+
+      const results = await Promise.allSettled(
+        chunk.map((signal) => this.streamProducer.produce(signal)),
+      );
+
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          accepted++;
+        } else {
+          rejected++;
+        }
       }
     }
 

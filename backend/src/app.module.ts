@@ -10,6 +10,7 @@ import { ServicesModule } from './common/services/services.module';
 import { WorkersModule } from './workers/workers.module';
 import { RepositoriesModule } from '@/repositories';
 import { RateLimiterMiddleware } from './common/middleware/rate-limiter.middleware';
+import { SignalsController } from './signals/signals.controller';
 
 const appEnv = process.env.APP_ENV || 'local';
 
@@ -32,10 +33,10 @@ const appEnv = process.env.APP_ENV || 'local';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    // Apply rate limiter only to ingestion endpoint
+    // Apply rate limiter to all signal ingestion endpoints, including batch ingest.
     consumer
       .apply(RateLimiterMiddleware)
-      .forRoutes('signals/ingest');
+      .forRoutes(SignalsController);
   }
 }
 

@@ -20,7 +20,7 @@ export class DlqService {
     errorType: string,
     errorMessage: string,
     attemptCount: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       await this.signalRepo.insertDlqEntry({
         signal_id: signalData.signal_id || 'unknown',
@@ -32,9 +32,11 @@ export class DlqService {
         last_attempt_at: new Date(),
         created_at: new Date(),
       });
+      return true;
     } catch (err) {
-      // If even DLQ write fails, just log — we can't recurse forever
+      // If even DLQ write fails, surface that so the caller does NOT ack.
       console.error('[DLQ] Failed to write to dead letter queue:', err);
+      return false;
     }
   }
 

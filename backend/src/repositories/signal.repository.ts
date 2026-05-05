@@ -12,19 +12,15 @@ export class SignalRepository {
   constructor(private readonly mongo: MongoService) {}
 
   /**
-   * Insert many raw signal documents (unordered for partial-failure tolerance).
+   * Persist one raw signal document idempotently.
+   * The audit worker writes the final linked_work_item_id in the same operation,
+   * so no follow-up Mongo patch is required from the business pipeline.
    */
-  async insertManyRaw(docs: Record<string, any>[]): Promise<any> {
-    return this.mongo.signalsRaw.insertMany(docs, { ordered: false });
-  }
-
-  /**
-   * Link a raw signal to a work item by updating its linked_work_item_id.
-   */
-  async linkSignalToWorkItem(signalId: string, workItemExternalId: string): Promise<void> {
+  async upsertRawSignal(doc: Record<string, any>): Promise<void> {
     await this.mongo.signalsRaw.updateOne(
-      { signal_id: signalId },
-      { $set: { linked_work_item_id: workItemExternalId } },
+      { signal_id: doc.signal_id },
+      { $set: doc },
+      { upsert: true },
     );
   }
 

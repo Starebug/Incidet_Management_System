@@ -138,17 +138,53 @@ CREATE INDEX idx_status_history_timeline
   ON status_history (work_item_id, changed_at DESC);
 
 -- ============================================================
--- INGEST DEDUPLICATION (Idempotency)
+-- INGEST LEDGER (Idempotency / Processing State)
 -- ============================================================
 
 CREATE TABLE ingest_dedup (
   signal_id UUID PRIMARY KEY,
-  received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  status VARCHAR(32) NOT NULL DEFAULT 'PROCESSING',
+  processing_started_at TIMESTAMPTZ NULL,
+  processed_at TIMESTAMPTZ NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_ingest_dedup_status
+    CHECK (status IN ('PROCESSING', 'PROCESSED', 'FAILED', 'DLQ'))
 );
 
 -- TTL cleanup: remove entries older than 1 hour via scheduled job
 -- (Postgres doesn't have native TTL; use pg_cron or app-level cleanup)
 CREATE INDEX idx_ingest_dedup_ttl ON ingest_dedup (received_at);
+
+-- Processing-state lookup for retries, stuck work, and repair tooling
+CREATE INDEX idx_ingest_dedup_status_updated
+  ON ingest_dedup (status, updated_at DESC);
+
+-- ============================================================
+-- AUDIT PERSISTENCE LEDGER (Async Mongo Audit Write State)
+-- ============================================================
+
+CREATE TABLE audit_signal_persistence (
+  signal_id UUID PRIMARY KEY,
+  work_item_external_id UUID NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+  processing_started_at TIMESTAMPTZ NULL,
+  persisted_at TIMESTAMPTZ NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_audit_signal_persistence_status
+    CHECK (status IN ('PENDING', 'PROCESSING', 'PERSISTED', 'FAILED', 'DLQ'))
+);
+
+CREATE INDEX idx_audit_signal_persistence_status_updated
+  ON audit_signal_persistence (status, updated_at DESC);
+
+CREATE INDEX idx_audit_signal_persistence_work_item
+  ON audit_signal_persistence (work_item_external_id, created_at DESC);
 
 -- ============================================================
 -- AGGREGATIONS (Time-series Metrics)
@@ -200,7 +236,8 @@ CREATE TRIGGER trg_rca_records_updated_at
 COMMENT ON TABLE work_items IS 'Source of truth for incident/work item lifecycle';
 COMMENT ON TABLE rca_records IS 'Root Cause Analysis records - required before closing incidents';
 COMMENT ON TABLE status_history IS 'Audit trail of all status transitions';
-COMMENT ON TABLE ingest_dedup IS 'Idempotency table for signal ingestion deduplication';
+COMMENT ON TABLE ingest_dedup IS 'Signal ingestion ledger for idempotency and end-to-end processing completion';
+COMMENT ON TABLE audit_signal_persistence IS 'Async audit-persistence ledger for Mongo raw signal writes';
 COMMENT ON TABLE incident_metrics_1m IS 'Pre-aggregated time-series metrics for dashboard';
 
 COMMENT ON COLUMN work_items.external_id IS 'Public UUID for API/UI - never expose internal id';
