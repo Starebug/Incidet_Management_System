@@ -1,10 +1,14 @@
+import { Type } from 'class-transformer';
 import {
+  ArrayNotEmpty,
   IsString,
   IsUUID,
   IsEnum,
   IsISO8601,
   IsObject,
   IsOptional,
+  IsArray,
+  ValidateNested,
 } from 'class-validator';
 
 export enum ServiceType {
@@ -25,22 +29,22 @@ export enum SeverityLevel {
 
 export class IngestSignalDto {
   @IsUUID()
-  signal_id: string;
+  signal_id!: string;
 
   @IsString()
-  component_id: string;
+  component_id!: string;
 
   @IsEnum(ServiceType)
-  service_type: ServiceType;
+  service_type!: ServiceType;
 
   @IsEnum(SeverityLevel)
-  severity: SeverityLevel;
+  severity!: SeverityLevel;
 
   @IsISO8601()
-  event_ts: string;
+  event_ts!: string;
 
   @IsObject()
-  payload: Record<string, any>;
+  payload!: Record<string, any>;
 
   @IsOptional()
   @IsString()
@@ -48,6 +52,10 @@ export class IngestSignalDto {
 }
 
 export class IngestBatchDto {
-  signals: IngestSignalDto[];
+  @IsArray()
+  @ArrayNotEmpty()
+  @ValidateNested({ each: true })
+  @Type(() => IngestSignalDto)
+  signals!: IngestSignalDto[];
 }
 

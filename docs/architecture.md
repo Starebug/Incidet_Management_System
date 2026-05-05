@@ -205,7 +205,7 @@ Consume from Stream
 
 | Endpoint Group | Purpose |
 |----------------|---------|
-| `/api/signals/ingest` | Signal ingestion |
+| `/api/signals/ingest/batch` | Signal ingestion |
 | `/api/incidents` | Incident CRUD |
 | `/api/incidents/:id/status` | Workflow transitions |
 | `/api/incidents/:id/rca` | RCA submission |

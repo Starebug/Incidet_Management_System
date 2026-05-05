@@ -14,16 +14,7 @@ export class SignalsService {
   }
 
   /**
-   * Enqueue a single signal into Redis Stream for async processing.
-   * Returns Redis message id.
-   * Throws 'QUEUE_FULL' if stream is at capacity (backpressure).
-   */
-  async enqueueSignal(dto: IngestSignalDto): Promise<string> {
-    return this.streamProducer.produce(dto);
-  }
-
-  /**
-   * Enqueue batch of signals with bounded parallelism.
+   * Enqueue one or more signals with bounded parallelism.
    * Best-effort: counts accepted vs rejected.
    */
   async enqueueBatch(

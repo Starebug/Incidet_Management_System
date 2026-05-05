@@ -99,7 +99,7 @@ Frontend runs at `http://localhost:5173`
 ### Ingestion
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/signals/ingest` | Ingest a signal |
+| POST | `/api/signals/ingest/batch` | Ingest one or more signals |
 
 ### Incidents
 | Method | Endpoint | Description |

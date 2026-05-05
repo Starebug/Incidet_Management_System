@@ -64,16 +64,20 @@ This file documents the prompts, specs, and planning artifacts used to build thi
 ### Signal Ingestion Spec
 
 ```
-POST /api/signals/ingest
+POST /api/signals/ingest/batch
 Content-Type: application/json
 
 {
-  "signal_id": "uuid",
-  "component_id": "CACHE_CLUSTER_01",
-  "service_type": "DISTRIBUTED_CACHE",
-  "severity": "P2",
-  "event_ts": "ISO-8601",
-  "payload": { ... }
+  "signals": [
+    {
+      "signal_id": "uuid",
+      "component_id": "CACHE_CLUSTER_01",
+      "service_type": "DISTRIBUTED_CACHE",
+      "severity": "P2",
+      "event_ts": "ISO-8601",
+      "payload": { ... }
+    }
+  ]
 }
 
 Response: 202 Accepted (queued)
