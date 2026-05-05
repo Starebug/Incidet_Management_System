@@ -36,14 +36,16 @@ export class SignalRepository {
     skip: number,
     limit: number,
   ): Promise<{ data: any[]; total: number }> {
+    const signalsRawRead = this.mongo.signalsRawReplicaRead;
+
     const [data, total] = await Promise.all([
-      this.mongo.signalsRaw
+      signalsRawRead
         .find({ linked_work_item_id: workItemExternalId })
         .sort({ received_at: -1 })
         .skip(skip)
         .limit(limit)
         .toArray(),
-      this.mongo.signalsRaw.countDocuments({ linked_work_item_id: workItemExternalId }),
+      signalsRawRead.countDocuments({ linked_work_item_id: workItemExternalId }),
     ]);
 
     return { data, total };

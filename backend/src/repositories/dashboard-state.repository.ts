@@ -105,16 +105,6 @@ export class DashboardStateRepository {
     await pipeline.exec();
   }
 
-  /**
-   * Update specific fields on an incident hash and refresh TTL.
-   */
-  async updateIncidentFields(externalId: string, fields: Record<string, string>, ttl?: number): Promise<void> {
-    const key = `incident:${externalId}`;
-    const pipeline = this.redis.client.pipeline();
-    pipeline.hset(key, fields);
-    pipeline.expire(key, ttl || this.DEFAULT_TTL);
-    await pipeline.exec();
-  }
 
   /**
    * Set a short expiry on an incident hash (e.g., for closed incidents).

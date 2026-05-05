@@ -49,32 +49,6 @@ export class DashboardCacheService {
     }
   }
 
-  /**
-   * Called after a signal is linked to an existing work item.
-   * Refreshes the incident hash TTL and updated_at.
-   */
-  async onSignalProcessed(
-    externalId: string,
-    severity: string,
-    isNew: boolean,
-  ): Promise<void> {
-    try {
-      if (isNew) {
-        return;
-      }
-
-      await this.dashboardStateRepo.updateIncidentFields(externalId, {
-        updated_at: new Date().toISOString(),
-      });
-      DebugLogger.log('DashboardCache', 'onSignalProcessed', {
-        externalId,
-        severity,
-        isNew,
-      });
-    } catch (err) {
-      console.error('[DashboardCache] onSignalProcessed failed:', err);
-    }
-  }
 
   /**
    * Called when an incident status transitions.

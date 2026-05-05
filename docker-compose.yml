@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # ============================================================
   # PostgreSQL - Source of Truth (Work Items, RCA, History)
@@ -24,11 +22,11 @@ services:
       retries: 5
 
   # ============================================================
-  # MongoDB - Data Lake (Raw Signals, Audit Log)
+  # MongoDB Replica Set - Data Lake (Raw Signals, Audit Log)
   # ============================================================
-  mongo:
+  mongo1:
     image: mongo:7
-    container_name: ims-mongo
+    container_name: ims-mongo1
     restart: unless-stopped
     environment:
       MONGO_INITDB_ROOT_USERNAME: ims
@@ -37,13 +35,86 @@ services:
     ports:
       - "27017:27017"
     volumes:
-      - mongo_data:/data/db
-      - ./backend/mongo/init_indexes.js:/docker-entrypoint-initdb.d/init_indexes.js:ro
+      - mongo1_data:/data/db
+      - ./backend/mongo/mongo-keyfile:/etc/mongo-keyfile-src:ro
+    command: >
+      bash -c "cp /etc/mongo-keyfile-src /tmp/mongo-keyfile
+      && chmod 400 /tmp/mongo-keyfile
+      && chown 999:999 /tmp/mongo-keyfile
+      && exec docker-entrypoint.sh mongod --replSet rs0 --bind_ip_all --keyFile /tmp/mongo-keyfile --port 27017"
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      test: ["CMD", "mongosh", "mongodb://ims:ims_secret@localhost:27017/admin?authSource=admin", "--quiet", "--eval", "db.adminCommand({ ping: 1 }).ok"]
       interval: 10s
       timeout: 5s
       retries: 5
+
+  mongo2:
+    image: mongo:7
+    container_name: ims-mongo2
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ims
+      MONGO_INITDB_ROOT_PASSWORD: ims_secret
+      MONGO_INITDB_DATABASE: ims
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo2_data:/data/db
+      - ./backend/mongo/mongo-keyfile:/etc/mongo-keyfile-src:ro
+    command: >
+      bash -c "cp /etc/mongo-keyfile-src /tmp/mongo-keyfile
+      && chmod 400 /tmp/mongo-keyfile
+      && chown 999:999 /tmp/mongo-keyfile
+      && exec docker-entrypoint.sh mongod --replSet rs0 --bind_ip_all --keyFile /tmp/mongo-keyfile --port 27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "mongodb://ims:ims_secret@localhost:27017/admin?authSource=admin", "--quiet", "--eval", "db.adminCommand({ ping: 1 }).ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo3:
+    image: mongo:7
+    container_name: ims-mongo3
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ims
+      MONGO_INITDB_ROOT_PASSWORD: ims_secret
+      MONGO_INITDB_DATABASE: ims
+    ports:
+      - "27019:27017"
+    volumes:
+      - mongo3_data:/data/db
+      - ./backend/mongo/mongo-keyfile:/etc/mongo-keyfile-src:ro
+    command: >
+      bash -c "cp /etc/mongo-keyfile-src /tmp/mongo-keyfile
+      && chmod 400 /tmp/mongo-keyfile
+      && chown 999:999 /tmp/mongo-keyfile
+      && exec docker-entrypoint.sh mongod --replSet rs0 --bind_ip_all --keyFile /tmp/mongo-keyfile --port 27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "mongodb://ims:ims_secret@localhost:27017/admin?authSource=admin", "--quiet", "--eval", "db.adminCommand({ ping: 1 }).ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo-init-replica:
+    image: mongo:7
+    container_name: ims-mongo-init-replica
+    restart: "no"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ims
+      MONGO_INITDB_ROOT_PASSWORD: ims_secret
+      MONGO_REPLICA_SET_NAME: rs0
+    depends_on:
+      mongo1:
+        condition: service_healthy
+      mongo2:
+        condition: service_healthy
+      mongo3:
+        condition: service_healthy
+    volumes:
+      - ./backend/mongo/init_replica.sh:/scripts/init_replica.sh:ro
+      - ./backend/mongo/init_indexes.js:/scripts/init_indexes.js:ro
+    command: ["bash", "/scripts/init_replica.sh"]
 
   # ============================================================
   # Redis - Hot Cache, Queue, Rate Limiter, Debounce
@@ -89,67 +160,77 @@ services:
     environment:
       ME_CONFIG_MONGODB_ADMINUSERNAME: ims
       ME_CONFIG_MONGODB_ADMINPASSWORD: ims_secret
-      ME_CONFIG_MONGODB_URL: mongodb://ims:ims_secret@mongo:27017/
+      ME_CONFIG_MONGODB_URL: mongodb://ims:ims_secret@mongo1:27017,mongo2:27017,mongo3:27017/ims?authSource=admin&replicaSet=rs0
       ME_CONFIG_BASICAUTH_USERNAME: admin
       ME_CONFIG_BASICAUTH_PASSWORD: admin
     ports:
       - "8082:8081"
     depends_on:
-      - mongo
+      mongo-init-replica:
+        condition: service_completed_successfully
     profiles:
       - dev
 
   # ============================================================
   # Backend API (uncomment when ready)
   # ============================================================
-  # backend:
-  #   build:
-  #     context: ./backend
-  #     dockerfile: Dockerfile
-  #   container_name: ims-backend
-  #   restart: unless-stopped
-  #   environment:
-  #     NODE_ENV: production
-  #     PORT: 3000
-  #     POSTGRES_URL: postgresql://ims:ims_secret@postgres:5432/ims_db
-  #     MONGODB_URL: mongodb://ims:ims_secret@mongo:27017/ims?authSource=admin
-  #     REDIS_URL: redis://redis:6379
-  #     RATE_LIMIT_RPS: 10000
-  #     DEBOUNCE_TTL_SEC: 10
-  #   ports:
-  #     - "3000:3000"
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #     mongo:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_healthy
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ims-backend
+    restart: unless-stopped
+    environment:
+      APP_ENV: docker
+      NODE_ENV: production
+      PORT: 3000
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ims
+      POSTGRES_PASSWORD: ims_secret
+      POSTGRES_DB: ims_db
+      MONGODB_URI: mongodb://ims:ims_secret@mongo1:27017,mongo2:27017,mongo3:27017/ims?authSource=admin&replicaSet=rs0
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      RATE_LIMIT_BUCKET_CAPACITY: 10000
+      RATE_LIMIT_REFILL_RATE: 10000
+      DEBOUNCE_TTL_SEC: 10
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo-init-replica:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   # ============================================================
   # Frontend (uncomment when ready)
   # ============================================================
-  # frontend:
-  #   build:
-  #     context: ./frontend
-  #     dockerfile: Dockerfile
-  #   container_name: ims-frontend
-  #   restart: unless-stopped
-  #   environment:
-  #     VITE_API_URL: http://localhost:3000
-  #   ports:
-  #     - "5173:80"
-  #   depends_on:
-  #     - backend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://localhost:3000/api
+    container_name: ims-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
 
 volumes:
   postgres_data:
-  mongo_data:
+  mongo1_data:
+  mongo2_data:
+  mongo3_data:
   redis_data:
 
 networks:

@@ -11,9 +11,14 @@ import { WorkersModule } from './workers/workers.module';
 import { RepositoriesModule } from '@/repositories';
 import { RateLimiterMiddleware } from './common/middleware/rate-limiter.middleware';
 
+const appEnv = process.env.APP_ENV || 'local';
+
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: [`.env.${appEnv}`, '.env'],
+    }),
     ServicesModule,
     RedisModule,
     DatabaseModule,

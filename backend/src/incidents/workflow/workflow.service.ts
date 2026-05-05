@@ -15,8 +15,6 @@ import { StateRegistry } from './states';
  *   OPEN → INVESTIGATING
  *   INVESTIGATING → RESOLVED
  *   RESOLVED → CLOSED (guarded — requires complete RCA)
- *   RESOLVED → INVESTIGATING (reopen)
- *   CLOSED → INVESTIGATING (reopen)
  *
  * Never calls a DB driver directly — all data access via WorkItemRepository.
  */

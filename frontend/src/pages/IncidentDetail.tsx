@@ -14,8 +14,8 @@ import StatusBadge from '../components/StatusBadge';
 const TRANSITIONS: Record<string, string[]> = {
   OPEN: ['INVESTIGATING'],
   INVESTIGATING: ['RESOLVED'],
-  RESOLVED: ['INVESTIGATING', 'CLOSED'],
-  CLOSED: ['INVESTIGATING'],
+  RESOLVED: ['CLOSED'],
+  CLOSED: [],
 };
 
 export default function IncidentDetail() {

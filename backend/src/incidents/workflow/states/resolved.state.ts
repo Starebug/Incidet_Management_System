@@ -6,25 +6,16 @@ import { IncidentStatus } from '../../dto/update-status.dto';
  *
  * Allowed transitions:
  *   RESOLVED → CLOSED        (guarded — requires complete RCA)
- *   RESOLVED → INVESTIGATING (reopen)
  *
  * The RCA validation guard lives here, co-located with the only
  * transition that requires it, eliminating scattered if-chains.
  */
 export class ResolvedState implements IncidentState {
   readonly status = IncidentStatus.RESOLVED;
-  readonly allowedTransitions = [
-    IncidentStatus.CLOSED,
-    IncidentStatus.INVESTIGATING,
-  ] as const;
+  readonly allowedTransitions = [IncidentStatus.CLOSED] as const;
 
   async execute(ctx: TransitionContext): Promise<void> {
-    if (ctx.targetStatus === IncidentStatus.CLOSED) {
-      await this.executeClose(ctx);
-    } else {
-      // Reopen → INVESTIGATING (no guard)
-      await ctx.workItemRepo.updateStatus(ctx.client, ctx.incident.id, ctx.targetStatus);
-    }
+    await this.executeClose(ctx);
   }
 
   // ─── RESOLVED → CLOSED guard ──────────────────────────────────────

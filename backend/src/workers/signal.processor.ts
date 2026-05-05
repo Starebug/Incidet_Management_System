@@ -18,7 +18,7 @@ import { DebugLogger } from '@/common/utils/debug-logger';
  *   3. Create/update Postgres work item
  *   4. Link raw signal to work item in MongoDB
  *   5. Determine alert severity (Strategy Pattern)
- *   6. Update Redis dashboard cache
+ *   6. Seed/update dashboard cache only on creation or status changes
  *
  * Never calls a DB driver directly — all data access via repositories.
  * Idempotency: duplicate signal_id in Mongo = already processed → skip.
@@ -123,8 +123,6 @@ export class SignalProcessor {
     // ─── Step 5: Link raw signal to work item in MongoDB ───────────
     await this.signalRepo.linkSignalToWorkItem(signal_id, workItemExternalId);
 
-    // ─── Step 6: Update dashboard hot cache ────────────────────────
-    await this.dashboardCache.onSignalProcessed(workItemExternalId, severity, isNew);
 
     DebugLogger.log('SignalProcessor', `Processed signal ${signal_id}`, {
       component_id,

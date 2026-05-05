@@ -62,6 +62,7 @@ export class IncidentsController {
   /**
    * GET /api/incidents/:id/signals
    * Get raw signals linked to this incident (from MongoDB).
+   * Audit/history browsing is eventually consistent and may briefly lag writes.
    */
   @Get(':id/signals')
   async getIncidentSignals(

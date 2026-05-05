@@ -1,10 +1,10 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { MongoClient, Db, Collection } from 'mongodb';
+import { MongoClient, Db, Collection, ReadPreference } from 'mongodb';
 
 @Injectable()
 export class MongoService implements OnModuleInit, OnModuleDestroy {
-  private client: MongoClient;
-  private db: Db;
+  private client!: MongoClient;
+  private db!: Db;
 
   async onModuleInit() {
     const uri = process.env.MONGODB_URI || 'mongodb://ims:ims_secret@localhost:27017/ims?authSource=admin';
@@ -30,6 +30,19 @@ export class MongoService implements OnModuleInit, OnModuleDestroy {
 
   get signalsRaw(): Collection {
     return this.db.collection('signals_raw');
+  }
+
+  /**
+   * Secondary-preferred accessor for audit/history browsing.
+   *
+   * Pattern C: latest audit logs may be briefly delayed, so read operations
+   * can prefer replicas when a replica set is available. In local standalone
+   * MongoDB setups, `secondaryPreferred` safely falls back to primary.
+   */
+  get signalsRawReplicaRead(): Collection {
+    return this.db.collection('signals_raw', {
+      readPreference: ReadPreference.secondaryPreferred,
+    });
   }
 
   get deadLetterQueue(): Collection {
