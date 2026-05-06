@@ -112,9 +112,9 @@ export class DebounceService {
    * Resolve whether to create a new work item or reuse an existing one.
    *
    * @param componentId - e.g. "CACHE_CLUSTER_01"
-   * @param serviceType - e.g. "DISTRIBUTED_CACHE"
-   * @param severity    - resolved severity (P0/P1/P2/P3)
-   * @param eventTs     - timestamp of the signal event
+   * @param _serviceType - e.g. "DISTRIBUTED_CACHE"
+   * @param _severity    - resolved severity (P0/P1/P2/P3)
+   * @param _eventTs     - timestamp of the signal event
    * @returns workItemExternalId + isNew flag
    */
   async resolveWorkItem(
@@ -176,7 +176,7 @@ export class DebounceService {
     const debounceKey = `debounce:${componentId}`;
     const lockKey = `lock:debounce:${componentId}`;
 
-    await this.redis.client.eval(
+    await this.redis.control.eval(
       this.PUBLISH_NEW_WORK_ITEM_SCRIPT,
       2,
       debounceKey,
@@ -201,7 +201,7 @@ export class DebounceService {
    */
   private async releaseLock(key: string, value: string): Promise<void> {
     try {
-      await this.redis.client.eval(this.RELEASE_LOCK_SCRIPT, 1, key, value);
+      await this.redis.control.eval(this.RELEASE_LOCK_SCRIPT, 1, key, value);
     } catch {
       // Lock may have expired — non-critical
     }
@@ -212,7 +212,7 @@ export class DebounceService {
     lockKey: string,
     lockValue: string,
   ): Promise<AtomicDebounceAcquireResult> {
-    const raw = await this.redis.client.eval(
+    const raw = await this.redis.control.eval(
       this.GET_OR_ACQUIRE_SCRIPT,
       2,
       debounceKey,
@@ -241,7 +241,7 @@ export class DebounceService {
       return null;
     }
 
-    await this.redis.client.set(debounceKey, active.external_id, 'EX', this.debounceTtl);
+    await this.redis.control.set(debounceKey, active.external_id, 'EX', this.debounceTtl);
     return active.external_id;
   }
 

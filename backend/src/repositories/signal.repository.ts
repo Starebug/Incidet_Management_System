@@ -53,12 +53,5 @@ export class SignalRepository {
   async insertDlqEntry(entry: Record<string, any>): Promise<void> {
     await this.mongo.deadLetterQueue.insertOne(entry);
   }
-
-  /**
-   * Get the count of entries in the dead letter queue.
-   */
-  async getDlqDepth(): Promise<number> {
-    return this.mongo.deadLetterQueue.countDocuments();
-  }
 }
 

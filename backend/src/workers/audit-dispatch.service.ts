@@ -51,7 +51,7 @@ export class AuditDispatchService {
       return;
     }
 
-    await this.redis.client.xadd(
+    await this.redis.queue.xadd(
       this.streamKey,
       'MAXLEN',
       '~',

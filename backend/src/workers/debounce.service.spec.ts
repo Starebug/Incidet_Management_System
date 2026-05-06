@@ -28,7 +28,7 @@ describe('DebounceService', () => {
 
   function makeService() {
     const redis = {
-      client: {
+      control: {
         eval: jest.fn(),
         set: jest.fn(),
       },
@@ -107,7 +107,7 @@ describe('DebounceService', () => {
 
     await service.finalizeNewWorkItem('COMPONENT_A', 'incident-1', 'token-1');
 
-    expect(redis.client.eval).toHaveBeenCalled();
+    expect(redis.control.eval).toHaveBeenCalled();
   });
 });
 

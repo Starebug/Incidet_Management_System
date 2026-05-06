@@ -19,6 +19,18 @@ export interface ListWorkItemsFilters {
   limit: number;
 }
 
+export interface DashboardIncidentSummary {
+  external_id: string;
+  component_id: string;
+  service_type: string;
+  severity: string;
+  status: string;
+  first_signal_at: Date;
+  last_signal_at: Date;
+  signal_count: number;
+  updated_at: Date;
+}
+
 /**
  * WorkItemRepository
  *
@@ -125,6 +137,53 @@ export class WorkItemRepository {
       [externalId],
     );
     return result.rows[0] || null;
+  }
+
+  /**
+   * Find the minimal dashboard projection row for a single incident.
+   */
+  async findDashboardSummaryByExternalId(externalId: string): Promise<DashboardIncidentSummary | null> {
+    const result = await this.pg.query(
+      `SELECT external_id, component_id, service_type, severity, status,
+              first_signal_at, last_signal_at, signal_count, updated_at
+       FROM work_items
+       WHERE external_id = $1`,
+      [externalId],
+    );
+
+    return result.rows[0] || null;
+  }
+
+  /**
+   * Find dashboard projection rows for a set of incident IDs.
+   */
+  async findDashboardSummariesByExternalIds(
+    externalIds: string[],
+    status?: string,
+  ): Promise<DashboardIncidentSummary[]> {
+    if (externalIds.length === 0) {
+      return [];
+    }
+
+    const params: any[] = [externalIds];
+    let whereClause = 'WHERE external_id = ANY($1::uuid[])';
+
+    if (status) {
+      params.push(status);
+      whereClause += ` AND status = $${params.length}`;
+    } else {
+      whereClause += ` AND status != 'CLOSED'`;
+    }
+
+    const result = await this.pg.query(
+      `SELECT external_id, component_id, service_type, severity, status,
+              first_signal_at, last_signal_at, signal_count, updated_at
+       FROM work_items
+       ${whereClause}`,
+      params,
+    );
+
+    return result.rows;
   }
 
   /**
@@ -351,9 +410,11 @@ export class WorkItemRepository {
    * Get live feed from Postgres (fallback when cache is cold).
    */
   async findLiveFeed(status?: string, limit = 100): Promise<any[]> {
+    const params: any[] = [];
     const statusFilter = status
-      ? `WHERE status = '${status}'`
+      ? `WHERE status = $${params.push(status)}`
       : `WHERE status != 'CLOSED'`;
+    const limitParam = `$${params.push(limit)}`;
 
     const result = await this.pg.query(
       `SELECT external_id, component_id, service_type, severity, status,
@@ -368,7 +429,8 @@ export class WorkItemRepository {
            WHEN 'P3' THEN 3
          END ASC,
          updated_at DESC
-       LIMIT ${limit}`,
+       LIMIT ${limitParam}`,
+      params,
     );
 
     return result.rows;

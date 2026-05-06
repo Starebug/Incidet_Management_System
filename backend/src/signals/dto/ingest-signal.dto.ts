@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   ArrayNotEmpty,
+  ArrayMaxSize,
   IsString,
   IsUUID,
   IsEnum,
@@ -54,6 +55,7 @@ export class IngestSignalDto {
 export class IngestBatchDto {
   @IsArray()
   @ArrayNotEmpty()
+  @ArrayMaxSize(10000)
   @ValidateNested({ each: true })
   @Type(() => IngestSignalDto)
   signals!: IngestSignalDto[];

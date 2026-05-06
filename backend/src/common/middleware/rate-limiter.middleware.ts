@@ -17,9 +17,9 @@ import { MetricsService } from '../services/metrics.service';
  * How it works:
  * - Each client has a "bucket" with max capacity (e.g., 10,000 tokens)
  * - Tokens refill at a steady rate (e.g., 10,000 tokens/sec)
- * - Each request consumes 1 token
+ * - Each accepted signal consumes 1 token
  * - If bucket is empty → reject with 429
- * - If tokens available → allow and decrement
+ * - If enough tokens are available for the batch → allow and decrement by batch size
  */
 @Injectable()
 export class RateLimiterMiddleware implements NestMiddleware {
@@ -81,16 +81,17 @@ export class RateLimiterMiddleware implements NestMiddleware {
     const clientId = this.getClientId(req);
     const key = `${this.keyPrefix}:${clientId}`;
     const now = Date.now() / 1000; // seconds with fractional precision
+    const requestedTokens = this.getRequestedTokens(req);
 
     try {
-      const result = await this.redis.client.eval(
+      const result = await this.redis.control.eval(
         this.TOKEN_BUCKET_SCRIPT,
         1,            // number of KEYS
         key,          // KEYS[1]
         String(this.bucketCapacity),  // ARGV[1] capacity
         String(this.refillRate),       // ARGV[2] refill rate
         String(now),                   // ARGV[3] current time
-        '1',                           // ARGV[4] tokens to consume
+        String(requestedTokens),       // ARGV[4] tokens to consume
       ) as [number, number];
 
       const allowed = result[0] === 1;
@@ -128,6 +129,15 @@ export class RateLimiterMiddleware implements NestMiddleware {
       req.ip ||
       'unknown'
     );
+  }
+
+  private getRequestedTokens(req: Request): number {
+    const signals = req.body?.signals;
+    if (Array.isArray(signals) && signals.length > 0) {
+      return signals.length;
+    }
+
+    return 1;
   }
 }
 

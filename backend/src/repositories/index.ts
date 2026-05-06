@@ -6,6 +6,15 @@ export {
   ScheduleAuditPersistenceResult,
   BeginAuditPersistenceResult,
 } from './audit-persistence.repository';
-export { WorkItemRepository, CreateWorkItemParams, ListWorkItemsFilters } from './work-item.repository';
-export { DashboardStateRepository } from './dashboard-state.repository';
+export {
+  WorkItemRepository,
+  CreateWorkItemParams,
+  ListWorkItemsFilters,
+  DashboardIncidentSummary,
+} from './work-item.repository';
+export {
+  DashboardStateRepository,
+  DashboardIncidentCacheEntry,
+  LoadIncidentSummariesResult,
+} from './dashboard-state.repository';
 

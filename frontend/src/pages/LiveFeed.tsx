@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { fetchLiveFeed, type Incident } from '../api/client';
+import { fetchLiveFeed, type Incident, updateIncidentStatus } from '../api/client';
 import SeverityBadge from '../components/SeverityBadge';
 
-const TABS = ['OPEN', 'INVESTIGATING', 'RESOLVED'] as const;
+const TABS = ['OPEN', 'INVESTIGATING', 'RESOLVED', 'CLOSED'] as const;
 type Tab = typeof TABS[number];
 
 export default function LiveFeed() {
@@ -12,6 +12,7 @@ export default function LiveFeed() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [source, setSource] = useState('');
+  const [updatingIds, setUpdatingIds] = useState<Record<string, boolean>>({});
 
   const load = async (tab: Tab) => {
     try {
@@ -35,6 +36,28 @@ export default function LiveFeed() {
     load(activeTab);
   };
 
+  const handleStatusAdvance = async (incident: Incident) => {
+    const nextStatus = getNextStatus(incident.status);
+    if (!nextStatus) {
+      return;
+    }
+
+    setUpdatingIds(prev => ({ ...prev, [incident.external_id]: true }));
+
+    try {
+      await updateIncidentStatus(incident.external_id, nextStatus);
+      await load(activeTab);
+    } catch (e: any) {
+      setError(e?.response?.data?.message || e.message || 'Failed to update incident status');
+    } finally {
+      setUpdatingIds(prev => {
+        const next = { ...prev };
+        delete next[incident.external_id];
+        return next;
+      });
+    }
+  };
+
   useEffect(() => {
     setLoading(true);
     load(activeTab);
@@ -51,10 +74,49 @@ export default function LiveFeed() {
     return `${Math.floor(diff / 86400)}d ago`;
   };
 
+  const isClosedTab = activeTab === 'CLOSED';
+
   const tabColors: Record<Tab, string> = {
     OPEN: 'border-red-500 text-red-400',
     INVESTIGATING: 'border-blue-500 text-blue-400',
     RESOLVED: 'border-green-500 text-green-400',
+    CLOSED: 'border-gray-500 text-gray-300',
+  };
+
+  const getActionConfig = (status: string) => {
+    switch (status) {
+      case 'OPEN':
+        return {
+          label: 'Start Investigation',
+          nextStatus: 'INVESTIGATING',
+          className: 'inline-flex items-center rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60',
+        };
+      case 'INVESTIGATING':
+        return {
+          label: 'Mark Resolved',
+          nextStatus: 'RESOLVED',
+          className: 'inline-flex items-center rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60',
+        };
+      case 'RESOLVED':
+        return {
+          label: 'RCA',
+          nextStatus: null,
+          className: 'inline-flex items-center rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-500',
+        };
+      default:
+        return null;
+    }
+  };
+
+  const getNextStatus = (status: string) => {
+    switch (status) {
+      case 'OPEN':
+        return 'INVESTIGATING';
+      case 'INVESTIGATING':
+        return 'RESOLVED';
+      default:
+        return null;
+    }
   };
 
   return (
@@ -76,6 +138,11 @@ export default function LiveFeed() {
             Auto-refreshes every 20s
             {source && <span className="ml-2 text-xs text-gray-600">({source})</span>}
           </p>
+          {isClosedTab && (
+            <p className="mt-2 text-xs text-gray-500">
+              Closed tickets are loaded directly from the source of truth.
+            </p>
+          )}
         </div>
       </div>
 
@@ -162,18 +229,38 @@ export default function LiveFeed() {
                     {timeAgo(inc.first_signal_at)}
                   </td>
                   <td className="px-4 py-3 text-right">
+                    {(() => {
+                      const action = getActionConfig(inc.status);
+                      const isUpdating = Boolean(updatingIds[inc.external_id]);
+
+                      return (
+                        <>
                     <Link
                       to={`/incidents/${inc.external_id}`}
                       className="mr-2 inline-flex items-center rounded-lg border border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:bg-gray-800"
                     >
                       View
                     </Link>
-                    <Link
-                      to={`/incidents/${inc.external_id}/rca`}
-                      className="inline-flex items-center rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-500"
-                    >
-                      RCA
-                    </Link>
+                          {action?.nextStatus ? (
+                            <button
+                              type="button"
+                              onClick={() => handleStatusAdvance(inc)}
+                              disabled={isUpdating}
+                              className={action.className}
+                            >
+                              {isUpdating ? 'Updating…' : action.label}
+                            </button>
+                          ) : action ? (
+                            <Link
+                              to={`/incidents/${inc.external_id}/rca`}
+                              className={action.className}
+                            >
+                              {action.label}
+                            </Link>
+                          ) : null}
+                        </>
+                      );
+                    })()}
                   </td>
                 </tr>
               ))}

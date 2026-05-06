@@ -1,9 +1,10 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { RedisService } from '@/common/redis/redis.service';
-import { SignalProcessor, ActiveProcessingLeaseError, DlqHandledError } from './signal.processor';
+import { SignalProcessor, ActiveProcessingLeaseError } from './signal.processor';
 import { DebounceResolutionInProgressError } from './debounce.service';
 import { MetricsService } from '@/common/services/metrics.service';
 import { DebugLogger } from '@/common/utils/debug-logger';
+import { getAppRole, runsSignalWorker } from '@/common/runtime/app-role';
 
 /**
  * SignalStreamConsumer
@@ -39,11 +40,19 @@ export class SignalStreamConsumer implements OnModuleInit, OnModuleDestroy {
     this.consumerName = `worker-${process.pid}-${Date.now()}`;
     this.batchSize = parseInt(process.env.WORKER_BATCH_SIZE || '50', 10);
     this.blockMs = parseInt(process.env.WORKER_BLOCK_MS || '2000', 10);
-    this.maxConcurrency = parseInt(process.env.WORKER_CONCURRENCY || '10', 10);
+    this.maxConcurrency = Math.max(
+      1,
+      parseInt(process.env.WORKER_CONCURRENCY || '10', 10),
+    );
     this.claimIdleMs = parseInt(process.env.WORKER_CLAIM_IDLE_MS || '30000', 10);
   }
 
   async onModuleInit() {
+    if (!runsSignalWorker()) {
+      console.log(`[Worker] Skipping signal consumer for APP_ROLE=${getAppRole()}`);
+      return;
+    }
+
     await this.ensureConsumerGroup();
     this.running = true;
     console.log(`[Worker] Consumer "${this.consumerName}" starting on group "${this.groupName}"`);
@@ -131,19 +140,25 @@ export class SignalStreamConsumer implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Process a batch of messages with bounded concurrency.
-   * Uses a simple semaphore approach.
+   * Refills slots immediately as work completes instead of waiting on chunk barriers.
    */
   private async processBatch(messages: Array<[string, string[]]>): Promise<void> {
-    // Chunk messages into concurrency-limited groups
-    for (let i = 0; i < messages.length; i += this.maxConcurrency) {
-      const chunk = messages.slice(i, i + this.maxConcurrency);
+    const inFlight = new Set<Promise<void>>();
 
-      const promises = chunk.map(([messageId, fields]) =>
-        this.processOne(messageId, fields),
-      );
+    for (const [messageId, fields] of messages) {
+      const task = this.processOne(messageId, fields)
+        .finally(() => {
+          inFlight.delete(task);
+        });
 
-      await Promise.allSettled(promises);
+      inFlight.add(task);
+
+      if (inFlight.size >= this.maxConcurrency) {
+        await Promise.race(inFlight);
+      }
     }
+
+    await Promise.allSettled(inFlight);
   }
 
   /**
@@ -166,7 +181,7 @@ export class SignalStreamConsumer implements OnModuleInit, OnModuleDestroy {
         messageId,
       });
     } catch (err: any) {
-      if (err instanceof DlqHandledError) {
+      if (this.isDlqHandledError(err)) {
         await this.redis.stream.xack(this.streamKey, this.groupName, messageId);
         DebugLogger.log('SignalWorker', 'Acked message after DLQ handoff', {
           consumer: this.consumerName,
@@ -246,6 +261,10 @@ export class SignalStreamConsumer implements OnModuleInit, OnModuleDestroy {
       obj[fields[i]] = fields[i + 1];
     }
     return obj;
+  }
+
+  private isDlqHandledError(err: unknown): err is Error {
+    return err instanceof Error && err.name === 'DlqHandledError';
   }
 
   private sleep(ms: number): Promise<void> {

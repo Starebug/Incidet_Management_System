@@ -1,6 +1,23 @@
 import { Injectable } from '@nestjs/common';
 import { RedisService } from '@/common/redis/redis.service';
 
+export interface DashboardIncidentCacheEntry {
+  external_id: string;
+  component_id: string;
+  service_type: string;
+  severity: string;
+  status: string;
+  first_signal_at: string;
+  last_signal_at: string;
+  signal_count: string;
+  updated_at: string;
+}
+
+export interface LoadIncidentSummariesResult {
+  incidents: DashboardIncidentCacheEntry[];
+  missingIds: string[];
+}
+
 /**
  * DashboardStateRepository
  *
@@ -10,7 +27,7 @@ import { RedisService } from '@/common/redis/redis.service';
  *
  * Redis key structures:
  *   dashboard:{status}        — ZSET of external_ids (score = severity rank)
- *   incident:{external_id}    — HASH with summary fields (TTL-based)
+ *   incident:{external_id}    — HASH with live dashboard summary fields
  */
 @Injectable()
 export class DashboardStateRepository {
@@ -19,8 +36,6 @@ export class DashboardStateRepository {
     INVESTIGATING: 'dashboard:investigating',
     RESOLVED: 'dashboard:resolved',
   };
-
-  private readonly DEFAULT_TTL = 300; // 5 minutes
 
   constructor(private readonly redis: RedisService) {}
 
@@ -32,7 +47,7 @@ export class DashboardStateRepository {
   async getIdsByStatus(status: string, start = 0, stop = 99): Promise<string[]> {
     const key = this.STATE_KEYS[status];
     if (!key) return [];
-    return this.redis.client.zrange(key, start, stop);
+    return this.redis.dashboard.zrange(key, start, stop);
   }
 
   /**
@@ -40,32 +55,12 @@ export class DashboardStateRepository {
    */
   async getAllActiveIds(limitPerState = 50): Promise<string[]> {
     const [openIds, investigatingIds, resolvedIds] = await Promise.all([
-      this.redis.client.zrange(this.STATE_KEYS.OPEN, 0, limitPerState - 1),
-      this.redis.client.zrange(this.STATE_KEYS.INVESTIGATING, 0, limitPerState - 1),
-      this.redis.client.zrange(this.STATE_KEYS.RESOLVED, 0, limitPerState - 1),
+      this.redis.dashboard.zrange(this.STATE_KEYS.OPEN, 0, limitPerState - 1),
+      this.redis.dashboard.zrange(this.STATE_KEYS.INVESTIGATING, 0, limitPerState - 1),
+      this.redis.dashboard.zrange(this.STATE_KEYS.RESOLVED, 0, limitPerState - 1),
     ]);
 
-    return [...(openIds || []), ...(investigatingIds || []), ...(resolvedIds || [])];
-  }
-
-  /**
-   * Add an incident to a state-specific sorted set.
-   */
-  async addToStateSet(status: string, externalId: string, score: number): Promise<void> {
-    const key = this.STATE_KEYS[status];
-    if (key) {
-      await this.redis.client.zadd(key, score, externalId);
-    }
-  }
-
-  /**
-   * Remove an incident from a state-specific sorted set.
-   */
-  async removeFromStateSet(status: string, externalId: string): Promise<void> {
-    const key = this.STATE_KEYS[status];
-    if (key) {
-      await this.redis.client.zrem(key, externalId);
-    }
+    return [...new Set([...(openIds || []), ...(investigatingIds || []), ...(resolvedIds || [])])];
   }
 
   // ─── Incident Hash Operations ─────────────────────────────────────
@@ -73,44 +68,54 @@ export class DashboardStateRepository {
   /**
    * Load incident summary hashes for multiple IDs (pipeline).
    */
-  async loadIncidentSummaries(ids: string[]): Promise<any[]> {
-    if (ids.length === 0) return [];
+  async loadIncidentSummaries(ids: string[]): Promise<LoadIncidentSummariesResult> {
+    if (ids.length === 0) {
+      return { incidents: [], missingIds: [] };
+    }
 
-    const pipeline = this.redis.client.pipeline();
+    const pipeline = this.redis.dashboard.pipeline();
     for (const id of ids) {
       pipeline.hgetall(`incident:${id}`);
     }
 
     const results = await pipeline.exec();
-    if (!results) return [];
-
-    const incidents: any[] = [];
-    for (const [err, data] of results) {
-      if (!err && data && typeof data === 'object' && Object.keys(data as object).length > 0) {
-        incidents.push(data);
-      }
+    if (!results) {
+      return { incidents: [], missingIds: [...ids] };
     }
 
-    return incidents;
+    const incidents: DashboardIncidentCacheEntry[] = [];
+    const missingIds: string[] = [];
+    results.forEach(([err, data], index) => {
+      if (!err && data && typeof data === 'object' && Object.keys(data as object).length > 0) {
+        incidents.push(data as DashboardIncidentCacheEntry);
+        return;
+      }
+      missingIds.push(ids[index]);
+    });
+
+    return { incidents, missingIds };
   }
 
   /**
-   * Set incident summary hash fields.
+   * Delete an incident summary hash.
    */
-  async setIncidentSummary(externalId: string, fields: Record<string, string>, ttl?: number): Promise<void> {
-    const key = `incident:${externalId}`;
-    const pipeline = this.redis.client.pipeline();
-    pipeline.hset(key, fields);
-    pipeline.expire(key, ttl || this.DEFAULT_TTL);
+  async deleteIncidentSummary(externalId: string): Promise<void> {
+    await this.redis.dashboard.del(`incident:${externalId}`);
+  }
+
+  /**
+   * Remove incident IDs from all active dashboard state sets.
+   */
+  async removeFromAllStateSets(externalIds: string[]): Promise<void> {
+    if (externalIds.length === 0) {
+      return;
+    }
+
+    const pipeline = this.redis.dashboard.pipeline();
+    for (const key of Object.values(this.STATE_KEYS)) {
+      pipeline.zrem(key, ...externalIds);
+    }
     await pipeline.exec();
-  }
-
-
-  /**
-   * Set a short expiry on an incident hash (e.g., for closed incidents).
-   */
-  async setIncidentExpiry(externalId: string, ttlSeconds: number): Promise<void> {
-    await this.redis.client.expire(`incident:${externalId}`, ttlSeconds);
   }
 
   // ─── Batch / Warm Cache Operations ────────────────────────────────
@@ -118,11 +123,10 @@ export class DashboardStateRepository {
   /**
    * Warm cache from a set of incident rows (pipeline).
    */
-  async warmCache(rows: any[], ttl?: number): Promise<void> {
+  async warmCache(rows: any[]): Promise<void> {
     if (!rows || rows.length === 0) return;
 
-    const effectiveTtl = ttl || this.DEFAULT_TTL;
-    const pipeline = this.redis.client.pipeline();
+    const pipeline = this.redis.dashboard.pipeline();
 
     for (const row of rows) {
       const key = `incident:${row.external_id}`;
@@ -135,9 +139,10 @@ export class DashboardStateRepository {
         severity: row.severity,
         status: row.status,
         first_signal_at: row.first_signal_at?.toISOString?.() || row.first_signal_at,
+        last_signal_at: row.last_signal_at?.toISOString?.() || row.last_signal_at,
+        signal_count: String(row.signal_count ?? 0),
         updated_at: row.updated_at?.toISOString?.() || row.updated_at,
       });
-      pipeline.expire(key, effectiveTtl);
 
       if (stateKey) {
         const score = this.severityScore(row.severity);
@@ -158,12 +163,31 @@ export class DashboardStateRepository {
     fields: Record<string, string>,
     severity: string,
   ): Promise<void> {
-    const pipeline = this.redis.client.pipeline();
+    const pipeline = this.redis.dashboard.multi();
 
     pipeline.zadd(this.STATE_KEYS.OPEN, this.severityScore(severity), externalId);
     pipeline.hset(`incident:${externalId}`, fields);
-    pipeline.expire(`incident:${externalId}`, this.DEFAULT_TTL);
 
+    await pipeline.exec();
+  }
+
+  /**
+   * Upsert an active incident projection in Redis.
+   */
+  async upsertActiveIncidentProjection(
+    status: string,
+    externalId: string,
+    fields: Record<string, string>,
+    severity: string,
+  ): Promise<void> {
+    const key = this.STATE_KEYS[status];
+    if (!key) {
+      return;
+    }
+
+    const pipeline = this.redis.dashboard.multi();
+    pipeline.zadd(key, this.severityScore(severity), externalId);
+    pipeline.hset(`incident:${externalId}`, fields);
     await pipeline.exec();
   }
 
@@ -174,28 +198,29 @@ export class DashboardStateRepository {
     externalId: string,
     oldStatus: string,
     newStatus: string,
-    severity: string,
+    fields: Record<string, string> | null,
+    severity?: string,
   ): Promise<void> {
-    const pipeline = this.redis.client.pipeline();
+    const pipeline = this.redis.dashboard.multi();
 
     const oldKey = this.STATE_KEYS[oldStatus];
     if (oldKey) {
       pipeline.zrem(oldKey, externalId);
     }
 
+    if (newStatus === 'CLOSED') {
+      pipeline.del(`incident:${externalId}`);
+      await pipeline.exec();
+      return;
+    }
+
     const newKey = this.STATE_KEYS[newStatus];
-    if (newKey) {
+    if (newKey && severity) {
       pipeline.zadd(newKey, this.severityScore(severity), externalId);
     }
 
-    pipeline.hset(`incident:${externalId}`, {
-      status: newStatus,
-      updated_at: new Date().toISOString(),
-    });
-    pipeline.expire(`incident:${externalId}`, this.DEFAULT_TTL);
-
-    if (newStatus === 'CLOSED') {
-      pipeline.expire(`incident:${externalId}`, 60);
+    if (fields) {
+      pipeline.hset(`incident:${externalId}`, fields);
     }
 
     await pipeline.exec();

@@ -35,7 +35,7 @@ describe('AuditDispatchService', () => {
 
     const xadd = jest.fn().mockResolvedValue('1-0');
     const redis = {
-      client: { xadd },
+      queue: { xadd },
     };
 
     const service = new AuditDispatchService(auditLedger as any, redis as any);

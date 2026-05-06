@@ -3,10 +3,10 @@ import { IncidentsController } from './incidents.controller';
 import { IncidentsService } from './incidents.service';
 import { WorkflowService } from './workflow/workflow.service';
 import { RcaService } from './rca/rca.service';
-import { WorkersModule } from '@/workers/workers.module';
+import { DashboardCacheModule } from '@/workers/dashboard-cache.module';
 
 @Module({
-  imports: [WorkersModule],
+  imports: [DashboardCacheModule],
   controllers: [IncidentsController],
   providers: [IncidentsService, WorkflowService, RcaService],
   exports: [IncidentsService],

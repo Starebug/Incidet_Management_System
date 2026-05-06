@@ -24,9 +24,6 @@ export class MongoService implements OnModuleInit, OnModuleDestroy {
     await this.client.close();
   }
 
-  getCollection(name: string): Collection {
-    return this.db.collection(name);
-  }
 
   get signalsRaw(): Collection {
     return this.db.collection('signals_raw');

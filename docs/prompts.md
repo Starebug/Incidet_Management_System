@@ -47,6 +47,7 @@ This file documents the prompts, specs, and planning artifacts used to build thi
 - Bounded concurrency (worker pool)
 - Circuit breakers (fail fast)
 - Dead letter queue (no data loss)
+- Public batch requests can be large, but the server should internally chunk them before enqueue
 
 ### 5. Design Patterns
 
@@ -84,6 +85,11 @@ Response: 202 Accepted (queued)
 Response: 429 Too Many Requests (rate limited)
 Response: 503 Service Unavailable (queue full)
 ```
+
+Batch semantics:
+- Up to **10,000** signals may be submitted in one request
+- Rate limiting is charged **per signal in the batch**
+- Accepted requests are internally chunked into **250-signal** slices before bounded concurrent enqueue
 
 ### Workflow Transition Rules
 
@@ -151,6 +157,7 @@ RCA Form:
 - Atomic operations for debounce (SET NX EX)
 - Redis Streams for queue (good enough for 10k/sec)
 - Sorted sets for dashboard hot data
+- Token bucket can charge by signal count for batch requests
 
 ### ADR-003: Async-First Processing
 

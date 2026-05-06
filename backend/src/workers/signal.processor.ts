@@ -30,8 +30,8 @@ export class DlqHandledError extends Error {
  *   1. Determine alert severity (Strategy Pattern)
  *   2. Resolve debounce (reuse or create work item)
  *   3. Create/update Postgres work item
- *   4. Schedule async audit persistence on a separate queue + ledger
- *   5. Seed/update dashboard cache only on creation or status changes
+  *   4. Schedule async audit persistence on a separate queue + ledger
+  *   5. Refresh the live dashboard projection for incident creates/updates
  *
  * Never calls a DB driver directly — all data access via repositories.
  * Idempotency: ingest ledger status = PROCESSED means already completed end-to-end.
@@ -152,6 +152,7 @@ export class SignalProcessor {
       } else {
         // Update existing: increment signal_count, update last_signal_at
         await this.workItem.addSignal(workItemExternalId, new Date(event_ts));
+        await this.dashboardCache.onIncidentUpdated(workItemExternalId);
       }
 
       // ─── Step 4: Schedule raw-signal audit persistence asynchronously ───

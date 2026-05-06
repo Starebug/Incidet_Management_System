@@ -78,7 +78,7 @@ export class StreamProducerService {
       'received_at',  new Date().toISOString(),
     ];
 
-    const result = await this.redis.client.eval(
+    const result = await this.redis.queue.eval(
       this.ATOMIC_ENQUEUE_SCRIPT,
       1,                        // number of KEYS
       this.streamKey,           // KEYS[1]
@@ -93,14 +93,4 @@ export class StreamProducerService {
     return result; // Redis stream message id e.g. "1714550400000-0"
   }
 
-  /**
-   * Get current stream length (for monitoring/metrics).
-   */
-  async getQueueDepth(): Promise<number> {
-    try {
-      return await this.redis.client.xlen(this.streamKey);
-    } catch {
-      return 0;
-    }
-  }
 }

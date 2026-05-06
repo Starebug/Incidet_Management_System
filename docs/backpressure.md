@@ -20,8 +20,8 @@ We implement a multi-layer backpressure strategy:
 │                                                                          │
 │  Layer 1: RATE LIMITING                                                 │
 │  ┌────────────────────────────────────────────────────────────────┐    │
-│  │ Client → Rate Limiter → Accept/Reject (429)                    │    │
-│  │ Strategy: Token bucket, 10k tokens/sec, burst allowance        │    │
+│  │ Client batch → Rate Limiter → Accept/Reject (429)              │    │
+│  │ Strategy: Token bucket, 10k signal-tokens/sec, burst allowance │    │
 │  └────────────────────────────────────────────────────────────────┘    │
 │                                    │                                    │
 │                                    ▼                                    │
@@ -56,20 +56,13 @@ We implement a multi-layer backpressure strategy:
 
 ```typescript
 // Token bucket rate limiter using Redis
-const RATE_LIMIT_KEY = 'rl:{clientId}:{window}';
-const MAX_REQUESTS_PER_SECOND = 10000;
-const WINDOW_SIZE_MS = 1000;
+const BUCKET_CAPACITY = 10000; // signals
+const REFILL_RATE = 10000;     // signals / second
 
-async function checkRateLimit(clientId: string): Promise<boolean> {
-  const windowKey = Math.floor(Date.now() / WINDOW_SIZE_MS);
-  const key = `rl:${clientId}:${windowKey}`;
-  
-  const count = await redis.incr(key);
-  if (count === 1) {
-    await redis.expire(key, 2); // Slightly longer than window
-  }
-  
-  return count <= MAX_REQUESTS_PER_SECOND;
+async function checkRateLimit(clientId: string, signalsInBatch: number): Promise<boolean> {
+  // Consume one token per signal in the request body.
+  // A 500-signal batch consumes 500 tokens; a 10,000-signal batch consumes the full bucket.
+  return tokenBucketConsume(clientId, signalsInBatch, BUCKET_CAPACITY, REFILL_RATE);
 }
 ```
 
@@ -80,6 +73,12 @@ async function checkRateLimit(clientId: string): Promise<boolean> {
 | Under limit | `202 Accepted` |
 | Over limit | `429 Too Many Requests` |
 | Redis unavailable | Allow through (fail-open for availability) |
+
+Notes:
+- The public ingestion API accepts up to **10,000** signals per request.
+- The rate limiter charges **per signal**, not per HTTP request.
+- Accepted requests are internally split into **250-signal** chunks before enqueueing.
+- Inside each 250-signal chunk, enqueueing uses **streaming bounded parallelism** (default concurrency `20`) rather than fixed sub-batch barriers.
 
 ### Headers Returned
 

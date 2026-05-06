@@ -39,15 +39,4 @@ export class DlqService {
       return false;
     }
   }
-
-  /**
-   * Get DLQ depth (for metrics/health).
-   */
-  async getDepth(): Promise<number> {
-    try {
-      return await this.signalRepo.getDlqDepth();
-    } catch {
-      return -1;
-    }
-  }
 }

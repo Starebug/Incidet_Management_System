@@ -79,10 +79,22 @@ Signal Received
       │
       ▼
 ┌─────────────┐
+│ Chunk Large │
+│ Batches     │
+│ (250 each)  │
+└─────────────┘
+      │
+      ▼
+┌─────────────┐
 │ Enqueue to  │──────▶ Return 202 Accepted
 │ Redis Stream│
 └─────────────┘
 ```
+
+**Ingestion contract:**
+- Public request limit: up to **10,000** signals per `/api/signals/ingest/batch` request
+- Edge rate limiter charges **1 token per signal** in the submitted batch
+- Accepted requests are internally chunked into **250-signal** slices before bounded concurrent enqueue
 
 ### 2. Signal Processing Flow (Async Worker)
 
@@ -180,17 +192,20 @@ Consume from Stream
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
-| Rate Limiter | Redis (token bucket) | Prevent cascading failures from signal storms |
+| Rate Limiter | Redis control plane (token bucket) | Prevent cascading failures from signal storms by charging per signal, not per request |
 | Ingest API | NestJS / FastAPI | Validate and accept incoming signals |
-| Buffer Queue | Redis Streams | Decouple ingestion from processing |
+| Buffer Queue | Redis Streams plane | Decouple ingestion from processing |
 
 ### Processing Layer
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
-| Signal Worker | BullMQ / asyncio | Consume and process signals asynchronously |
+| Signal Worker | NestJS worker role + Redis consumer group | Consume and process signals asynchronously in dedicated worker processes |
+| Audit Worker | NestJS worker role + Redis consumer group | Persist audit signals asynchronously without blocking the business pipeline |
 | Debounce Logic | Redis (SET NX EX) | Coalesce signals into single work items |
 | Alert Strategy | Strategy Pattern | Route alerts based on component/severity |
+
+The backend runtime now supports `APP_ROLE=api`, `APP_ROLE=signal-worker`, and `APP_ROLE=audit-worker`, so API and worker processes can be deployed and scaled independently while still sharing the same Redis Streams consumer groups.
 
 ### Persistence Layer
 
@@ -198,7 +213,9 @@ Consume from Stream
 |-------|------------|----------|
 | Data Lake | MongoDB | High-volume raw signal storage (audit) |
 | Source of Truth | PostgreSQL | Transactional workflow state, RCA |
-| Hot Cache | Redis | Real-time dashboard, counters |
+| Redis Control Plane | Redis | Rate limiting + debounce coordination |
+| Redis Streams Plane | Redis | Ingest + audit stream transport |
+| Hot Cache | Redis Cache Plane | Real-time dashboard projection for active incidents |
 | Aggregations | TimescaleDB / Postgres | Time-series metrics |
 
 ### API Layer
@@ -212,6 +229,14 @@ Consume from Stream
 | `/api/incidents/:id/signals` | Raw signals for incident |
 | `/api/dashboard/live` | Dashboard data |
 | `/health` | System health check |
+
+## Dashboard Cache Consistency Model
+
+- Redis stores an **active-incident dashboard projection**, not a TTL-driven best-effort fragment cache.
+- Active incidents (`OPEN`, `INVESTIGATING`, `RESOLVED`) are kept in Redis **without per-entry TTL**.
+- When an incident becomes `CLOSED`, its dashboard projection is **explicitly removed** from Redis.
+- Dashboard reads are **Redis-first**, but if Redis is missing summaries, contains wrong-status entries, or is unavailable, the API falls back to PostgreSQL and backfills the Redis projection.
+- A lightweight reconciliation path prunes stale Redis IDs and repopulates missing summaries from PostgreSQL on demand.
 
 ## Design Patterns
 

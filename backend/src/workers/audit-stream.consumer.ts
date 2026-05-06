@@ -7,6 +7,7 @@ import {
 } from './audit-persistence.processor';
 import { MetricsService } from '@/common/services/metrics.service';
 import { DebugLogger } from '@/common/utils/debug-logger';
+import { getAppRole, runsAuditWorker } from '@/common/runtime/app-role';
 
 /**
  * AuditStreamConsumer
@@ -41,6 +42,11 @@ export class AuditStreamConsumer implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleInit() {
+    if (!runsAuditWorker()) {
+      console.log(`[AuditWorker] Skipping audit consumer for APP_ROLE=${getAppRole()}`);
+      return;
+    }
+
     await this.ensureConsumerGroup();
     this.running = true;
     console.log(`[AuditWorker] Consumer "${this.consumerName}" starting on group "${this.groupName}"`);

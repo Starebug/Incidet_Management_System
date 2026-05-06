@@ -6,13 +6,14 @@ export class DashboardController {
   constructor(private readonly dashboardService: DashboardService) {}
 
   /**
-   * GET /api/dashboard/live?status=OPEN|INVESTIGATING|RESOLVED
+   * GET /api/dashboard/live?status=OPEN|INVESTIGATING|RESOLVED|CLOSED
    * Returns incidents for the given status tab, sorted by severity.
-   * Uses Redis state-partitioned cache with Postgres fallback.
+   * Active tabs use Redis state-partitioned cache with Postgres fallback.
+   * CLOSED always queries Postgres directly as the source of truth.
    */
   @Get('live')
   async getLiveFeed(@Query('status') status?: string) {
-    const validStatuses = ['OPEN', 'INVESTIGATING', 'RESOLVED'];
+    const validStatuses = ['OPEN', 'INVESTIGATING', 'RESOLVED', 'CLOSED'];
     const resolvedStatus = validStatuses.includes(status?.toUpperCase() || '')
       ? status!.toUpperCase()
       : undefined; // undefined = all active

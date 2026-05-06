@@ -5,11 +5,16 @@ import { StreamProducerService } from './stream-producer.service';
 @Injectable()
 export class SignalsService {
   private readonly batchEnqueueConcurrency: number;
+  private readonly batchChunkSize: number;
 
   constructor(private readonly streamProducer: StreamProducerService) {
     this.batchEnqueueConcurrency = Math.max(
       1,
       parseInt(process.env.BATCH_ENQUEUE_CONCURRENCY || '20', 10),
+    );
+    this.batchChunkSize = Math.max(
+      this.batchEnqueueConcurrency,
+      parseInt(process.env.BATCH_ENQUEUE_CHUNK_SIZE || '250', 10),
     );
   }
 
@@ -23,20 +28,31 @@ export class SignalsService {
     let accepted = 0;
     let rejected = 0;
 
-    for (let i = 0; i < signals.length; i += this.batchEnqueueConcurrency) {
-      const chunk = signals.slice(i, i + this.batchEnqueueConcurrency);
+    for (let i = 0; i < signals.length; i += this.batchChunkSize) {
+      const requestChunk = signals.slice(i, i + this.batchChunkSize);
 
-      const results = await Promise.allSettled(
-        chunk.map((signal) => this.streamProducer.produce(signal)),
-      );
+      const inFlight = new Set<Promise<void>>();
 
-      for (const result of results) {
-        if (result.status === 'fulfilled') {
-          accepted++;
-        } else {
-          rejected++;
+      for (const signal of requestChunk) {
+        const task = this.streamProducer.produce(signal)
+          .then(() => {
+            accepted++;
+          })
+          .catch(() => {
+            rejected++;
+          })
+          .finally(() => {
+            inFlight.delete(task);
+          });
+
+        inFlight.add(task);
+
+        if (inFlight.size >= this.batchEnqueueConcurrency) {
+          await Promise.race(inFlight);
         }
       }
+
+      await Promise.allSettled(inFlight);
     }
 
     return { accepted, rejected };
